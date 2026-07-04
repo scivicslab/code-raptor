@@ -1,0 +1,18 @@
+target/
+*.class
+*.jar
+*.log
+
+# IDE / editor
+.idea/
+*.iml
+.vscode/
+.settings/
+.classpath
+.project
+
+# OS
+.DS_Store
+
+# code-raptor runtime index (generated under the works dir, never in the repo)
+.code-raptor/
