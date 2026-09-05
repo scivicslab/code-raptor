@@ -25,12 +25,16 @@ public class JavadocResource {
     @Inject
     JavadocIndexer indexer;
 
+    @Inject
+    com.scivicslab.coderaptor.activity.ServedLog servedLog;
+
     @GET
     @Produces(MediaType.APPLICATION_JSON)
     public List<JavadocHit> search(@QueryParam("q") String query) {
         if (query == null || query.isBlank()) {
             return Collections.emptyList();
         }
+        servedLog.note("javadoc?q=" + query, "「" + query + "」をJavadocから検索");
         return indexer.search(query);
     }
 }

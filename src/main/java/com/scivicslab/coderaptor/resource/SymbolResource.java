@@ -38,6 +38,9 @@ public class SymbolResource {
     @Inject
     CodeRaptorConfig config;
 
+    @Inject
+    com.scivicslab.coderaptor.activity.ServedLog servedLog;
+
     @GET
     @Produces(MediaType.APPLICATION_JSON)
     public List<SymbolHit> search(
@@ -48,6 +51,8 @@ public class SymbolResource {
             return Collections.emptyList();
         }
 
+        servedLog.note("symbol?q=" + query + "&type=" + type,
+                       "「" + query + "」をソースから検索");
         String[] args = buildGlobalArgs(query, type);
         return runGlobal(args);
     }

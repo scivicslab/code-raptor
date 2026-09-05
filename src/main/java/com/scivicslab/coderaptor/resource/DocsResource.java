@@ -29,6 +29,7 @@ public class DocsResource {
 
     @Inject CodeRaptorConfig config;
     @Inject ProjectInfoReader infoReader;
+    @Inject com.scivicslab.coderaptor.activity.ServedLog servedLog;
 
     /** Redirect bare project name to index.html. */
     @GET
@@ -77,6 +78,10 @@ public class DocsResource {
 
         try {
             byte[] bytes = Files.readAllBytes(target);
+            // Only pages that name something a reader recognises. One Javadoc page pulls in a
+            // stylesheet, a script and a dozen icons, and none of those say what is being read.
+            String label = com.scivicslab.coderaptor.activity.JavadocPathLabel.of(path);
+            if (label != null) servedLog.note(project + "/" + path, label + "（" + project + "）");
             return Response.ok(bytes)
                     .type(mimeType(target.getFileName().toString()))
                     .build();
