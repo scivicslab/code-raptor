@@ -34,7 +34,7 @@ public class JavadocResource {
         if (query == null || query.isBlank()) {
             return Collections.emptyList();
         }
-        servedLog.note("javadoc?q=" + query, "「" + query + "」をJavadocから検索");
+        servedLog.note("javadoc?q=" + query, "Searching the Javadoc for \"" + query + "\"");
         return indexer.search(query);
     }
 }

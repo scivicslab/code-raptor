@@ -52,7 +52,7 @@ public class ActivityResource {
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("summary", recent.isEmpty()
-                ? "索引はあるが、まだ誰も引いていない。"
+                ? "The index is built, but nobody has searched it yet."
                 : recent.get(0).label());
         out.put("asOf", recent.isEmpty() ? Instant.now().toString()
                                          : Instant.ofEpochMilli(recent.get(0).at()).toString());

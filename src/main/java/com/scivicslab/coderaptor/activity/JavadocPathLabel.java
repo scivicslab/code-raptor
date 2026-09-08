@@ -40,7 +40,7 @@ public final class JavadocPathLabel {
 
         String dir = p.contains("/") ? p.substring(0, p.lastIndexOf('/')) : "";
         if ("package-summary".equals(file) || "package-tree".equals(file) || "package-use".equals(file)) {
-            return dir.isEmpty() ? null : dir.replace('/', '.') + " パッケージ";
+            return dir.isEmpty() ? null : "package " + dir.replace('/', '.');
         }
         return dir.isEmpty() ? file : dir.replace('/', '.') + "." + file;
     }

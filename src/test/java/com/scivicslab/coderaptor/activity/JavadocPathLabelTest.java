@@ -28,7 +28,7 @@ class JavadocPathLabelTest {
 
     @Test
     void aPackagePage_saysItIsAPackage() {
-        assertEquals("com.scivicslab.pojoactor.core パッケージ",
+        assertEquals("package com.scivicslab.pojoactor.core",
                 JavadocPathLabel.of("com/scivicslab/pojoactor/core/package-summary.html"));
     }
 

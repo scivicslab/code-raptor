@@ -52,7 +52,7 @@ public class SymbolResource {
         }
 
         servedLog.note("symbol?q=" + query + "&type=" + type,
-                       "「" + query + "」をソースから検索");
+                       "Searching the source for \"" + query + "\"");
         String[] args = buildGlobalArgs(query, type);
         return runGlobal(args);
     }
