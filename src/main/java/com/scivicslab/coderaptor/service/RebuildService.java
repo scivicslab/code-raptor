@@ -57,14 +57,32 @@ public class RebuildService {
     /** ID of the last rebuild started; guarded by this service's lock. */
     private String lastRebuild;
 
-    /** Starts a rebuild of {@code target}, or returns the running rebuild's ID. */
-    public synchronized String start(Target target) {
+    /** Starts a rebuild of {@code target} for every project, or returns the running rebuild's ID. */
+    public String start(Target target) {
+        return start(target, null);
+    }
+
+    /**
+     * Starts a rebuild of {@code target}, or returns the running rebuild's ID. With a project, only
+     * that project's part of each index is rewritten: its changed source files in the gtags files,
+     * its entry in the project list index, its pages in the Javadoc index.
+     *
+     * @param project a project directory name in works-dir, or null for every project
+     * @throws IllegalArgumentException when the project is not a code project in works-dir
+     */
+    public synchronized String start(Target target, String project) {
+        if (project != null && indexService.codeProjects().stream()
+                .noneMatch(dir -> dir.getFileName().toString().equals(project))) {
+            throw new IllegalArgumentException("Not a code project in works-dir: " + project);
+        }
         if (lastRebuild != null && buildService.get(lastRebuild)
                 .map(s -> Boolean.TRUE.equals(s.get("running"))).orElse(false)) {
             return lastRebuild;
         }
-        String id = buildService.startJob("all projects",
-                "rebuild " + target.name().toLowerCase(Locale.ROOT), job -> run(target, job));
+        String task = "rebuild " + target.name().toLowerCase(Locale.ROOT);
+        String id = project == null
+                ? buildService.startJob("all projects", task, job -> run(target, job))
+                : buildService.startJob(project, task, job -> runOne(target, project, job));
         lastRebuild = id;
         return id;
     }
@@ -96,6 +114,38 @@ public class RebuildService {
         }
         job.line("Done. Docs failed in " + failed.size() + " project(s): " + String.join(", ", failed));
         return 1;
+    }
+
+    private int runOne(Target target, String project, JobContext job) {
+        boolean failed = false;
+        if (target == Target.SYMBOL || target == Target.ALL) {
+            if (job.stopRequested()) return stopped(job);
+            job.line("Symbol: updating the gtags files for " + project + "…");
+            job.line("Symbol: " + indexService.updateSymbolIndex(project));
+        }
+        if (target == Target.JAVADOC || target == Target.ALL) {
+            if (job.stopRequested()) return stopped(job);
+            ProjectInfo info = infoReader.read(indexService.worksDir().resolve(project));
+            if (buildService.hasDocs(info.buildSystem())) {
+                job.line("Javadoc: running Docs in " + project + "…");
+                int code = buildService.runDocs(indexService.worksDir().resolve(project),
+                        info.buildSystem(), job, job::line);
+                if (job.stopRequested()) return stopped(job);
+                if (code != 0) {
+                    job.line("Javadoc: Docs failed with exit code " + code);
+                    failed = true;
+                }
+            } else {
+                job.line("Javadoc: " + project + " has no Docs command; indexing the Javadoc already on disk");
+            }
+            job.line("Javadoc: " + indexService.updateJavadocIndex(project));
+        }
+        if (target == Target.PROJECTS || target == Target.ALL) {
+            if (job.stopRequested()) return stopped(job);
+            job.line("Projects: " + indexService.updateProjectIndex(project));
+        }
+        job.line(failed ? "Done, but Docs failed." : "Done.");
+        return failed ? 1 : 0;
     }
 
     /** Ends a stopped rebuild; the steps after the one that was running are not done. */

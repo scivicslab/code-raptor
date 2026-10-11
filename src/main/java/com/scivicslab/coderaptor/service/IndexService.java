@@ -87,6 +87,25 @@ public class IndexService {
         return "project list index: " + projects.size() + " project(s)";
     }
 
+    /** Brings the gtags files up to date for one project's source files only. */
+    public String updateSymbolIndex(String project) {
+        return gtagsIndexer.updateProject(config.getWorksDir(), project);
+    }
+
+    /** Replaces one project's entry in the Lucene project-metadata index. */
+    public String updateProjectIndex(String project) {
+        boolean ok = projectIndexer.updateProject(infoReader.read(config.getWorksDir().resolve(project)));
+        return ok ? "project list index: replaced the entry of " + project
+                  : "project list index: could not write the entry of " + project;
+    }
+
+    /** Replaces one project's pages in the Lucene Javadoc index with its Javadoc HTML on disk. */
+    public String updateJavadocIndex(String project) {
+        int pages = javadocIndexer.updateProject(config.getWorksDir().resolve(project));
+        return pages < 0 ? "Javadoc index: could not write the pages of " + project
+                         : "Javadoc index: " + pages + " page(s) of " + project;
+    }
+
     /**
      * Rebuilds the Lucene Javadoc index from the Javadoc HTML already on disk
      * (powers GET /api/javadoc?q=...).

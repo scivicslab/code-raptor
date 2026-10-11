@@ -7,7 +7,12 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.stream.Stream;
 
 /**
@@ -93,6 +98,11 @@ public class GtagsIndexer {
      * and build/VCS directories (target/, .git/, etc.) at any depth.
      */
     private List<Path> collectSourceFiles(Path worksDir) {
+        return collectSourceFiles(worksDir, worksDir);
+    }
+
+    /** The source files gtags indexes under {@code start}, which is works-dir or one project in it. */
+    private List<Path> collectSourceFiles(Path worksDir, Path start) {
         List<Path> files = new ArrayList<>();
 
         // Use a custom walk that prunes excluded directories
@@ -127,10 +137,101 @@ public class GtagsIndexer {
                     return java.nio.file.FileVisitResult.CONTINUE;
                 }
             };
-            Files.walkFileTree(worksDir, visitor);
+            Files.walkFileTree(start, visitor);
         } catch (IOException e) {
             LOG.errorf(e, "Error walking worksDir: %s", worksDir);
         }
+        return files;
+    }
+
+    /** More changed files than this are faster to index by rebuilding everything. */
+    static final int MAX_SINGLE_UPDATES = 150;
+
+    /**
+     * Brings the gtags files up to date for one project only: each of its source files that was
+     * added, deleted or modified since the GTAGS file was written is handed to
+     * {@code gtags --single-update}, which leaves every other file's tags as they are.
+     *
+     * <p>{@code gtags -i -f <list>} is not used: it treats files missing from the list as deleted,
+     * which drops every other project.
+     *
+     * @return one line saying what was done
+     */
+    public String updateProject(Path worksDir, String project) {
+        Path gtags = worksDir.resolve("GTAGS");
+        if (!Files.exists(gtags)) {
+            return buildIndex(worksDir) + " (no GTAGS yet, so every project was indexed)";
+        }
+        long gtagsTime;
+        Set<String> listed;
+        try {
+            gtagsTime = Files.getLastModifiedTime(gtags).toMillis();
+            listed = listedFiles(worksDir, project);
+        } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            return "gtags failed: cannot read GPATH: " + e.getMessage();
+        }
+        Map<String, Long> current = new HashMap<>();
+        for (Path file : collectSourceFiles(worksDir, worksDir.resolve(project))) {
+            try {
+                current.put(worksDir.relativize(file).toString(), Files.getLastModifiedTime(file).toMillis());
+            } catch (IOException ignored) {}
+        }
+        List<String> changed = filesToUpdate(listed, current, gtagsTime);
+        if (changed.isEmpty()) {
+            return "gtags: no source file of " + project + " changed";
+        }
+        if (changed.size() > MAX_SINGLE_UPDATES) {
+            return buildIndex(worksDir) + " (" + changed.size() + " files of " + project
+                    + " changed, so every project was indexed)";
+        }
+        for (String file : changed) {
+            try {
+                Process p = new ProcessBuilder("gtags", "--accept-dotfiles", "--single-update", file)
+                        .directory(worksDir.toFile()).redirectErrorStream(true).start();
+                String output = new String(p.getInputStream().readAllBytes());
+                int code = p.waitFor();
+                if (code != 0) return "gtags failed on " + file + " with exit code " + code + ": " + output.strip();
+            } catch (IOException | InterruptedException e) {
+                if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+                return "gtags failed on " + file + ": " + e.getMessage();
+            }
+        }
+        return "gtags updated " + changed.size() + " file(s) of " + project;
+    }
+
+    /**
+     * The files of one project to hand to {@code gtags --single-update}: added (not yet in GPATH),
+     * deleted (in GPATH, gone from disk), and modified after the GTAGS file was written.
+     *
+     * @param listed   the project's files GPATH holds, relative to works-dir
+     * @param current  the project's source files on disk → modification time in milliseconds
+     */
+    static List<String> filesToUpdate(Set<String> listed, Map<String, Long> current, long gtagsTime) {
+        Set<String> changed = new TreeSet<>();
+        for (Map.Entry<String, Long> e : current.entrySet()) {
+            if (!listed.contains(e.getKey()) || e.getValue() > gtagsTime) changed.add(e.getKey());
+        }
+        for (String file : listed) {
+            if (!current.containsKey(file)) changed.add(file);
+        }
+        return new ArrayList<>(changed);
+    }
+
+    /** The project's files in GPATH, read with {@code global -P}, relative to works-dir. */
+    private static Set<String> listedFiles(Path worksDir, String project) throws IOException, InterruptedException {
+        Process p = new ProcessBuilder("global", "-P").directory(worksDir.toFile()).start();
+        String prefix = project + "/";
+        Set<String> files = new HashSet<>();
+        try (java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(p.getInputStream()))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                String path = line.startsWith("./") ? line.substring(2) : line;
+                if (path.startsWith(prefix)) files.add(path);
+            }
+        }
+        int code = p.waitFor();
+        if (code != 0) throw new IOException("global -P exited with code " + code);
         return files;
     }
 

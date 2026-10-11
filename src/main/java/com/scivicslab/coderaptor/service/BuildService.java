@@ -246,7 +246,12 @@ public class BuildService {
                 // dangling {@link} from stopping the whole run. disableNoFonts: plugin 3.12 passes
                 // --no-fonts by default, yet the stylesheet JDK 23+ writes still imports
                 // fonts/dejavu.css, so every page would ask /docs for a file that is not there.
+                // The rm comes first because the plugin judges "everything is up to date" from its
+                // stale-data file and skips a changed source tree, and never deletes the page of a
+                // removed class.
                 case "docs"  -> new String[]{"bash", "-c",
+                        "rm -rf target/site/apidocs target/reports/apidocs" +
+                        " target/maven-javadoc-plugin-stale-data.txt && " +
                         "JAVA_TOOL_OPTIONS='-Duser.language=en -Duser.country=US'" +
                         " mvn -B javadoc:aggregate -Dlocale=en_US -Ddoclint=none" +
                         " -Dmaven.javadoc.disableNoFonts=true"};

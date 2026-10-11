@@ -732,8 +732,14 @@ public class PortalResource {
                     let actions = '';
                     if (hasBuild)
                       actions += '<button class="build-btn" data-project="' + esc(p.name) + '" data-task="build" data-bs="' + esc(p.buildSystem) + '" onclick="doBuild(this)">Build</button>';
-                    if (hasDocs)
-                      actions += '<button class="build-btn" data-project="' + esc(p.name) + '" data-task="docs" data-bs="' + esc(p.buildSystem) + '" onclick="doBuild(this)">Docs</button>';
+                    // Same targets as the header, but only this project's part of each index is rewritten.
+                    actions += '<select class="row-target page-size" title="What to rebuild for this project">'
+                             + '<option value="symbol">Symbol</option>'
+                             + (hasDocs ? '<option value="javadoc">Javadoc</option>' : '')
+                             + '<option value="projects">Projects</option>'
+                             + '<option value="all">All</option></select>'
+                             + '<button class="build-btn" data-project="' + esc(p.name) + '" data-task="rebuild" onclick="doRebuild(this)"'
+                             + ' title="Rebuild this project\\'s part of the selected search">\\u21bb Rebuild</button>';
                     return '<div class="project-row"><div class="project-name"><a href="' + ideUrl + '" target="code-server-ide">' + esc(p.name) + '</a>' + sub + '</div><div class="project-labels">' + tags + '</div>' + (actions ? '<div class="project-actions">' + actions + '</div>' : '') + '</div>';
                   }).join('');
                   setInner('projects-list', '<div class="project-list">' + rows + '</div>');
@@ -770,27 +776,31 @@ public class PortalResource {
               function setPageSize(n) { pageSize = n; loadProjects(0, currentFilter); }
               function filterProjects(q) { clearTimeout(filterTimer); filterTimer = setTimeout(() => loadProjects(0, q), 300); }
 
-              // ── Rebuild for every project ──────────────────────────────────
-              // Symbol: gtags files. Javadoc: each project's Docs, then the Javadoc index.
-              // Projects: the project list index. All: the three. The log shows in the right pane.
+              // ── Rebuild ────────────────────────────────────────────────────
+              // Symbol: gtags files. Javadoc: Docs, then the Javadoc index. Projects: the project
+              // list index. All: the three. From the header for every project; from a project's row
+              // for that project's part only. The log shows in the right pane.
               function doRebuild(btn) {
-                const target = document.getElementById('rebuild-target').value;
+                const project = btn.dataset.project || '';
+                const target = project ? btn.parentElement.querySelector('select.row-target').value
+                                       : document.getElementById('rebuild-target').value;
+                const title = project || 'all projects';
                 btn.disabled = true;
                 btn.textContent = '\u2026';
                 btn.classList.remove('build-btn-ok', 'build-btn-err');
                 lastBuildBtn = btn;
                 document.getElementById('log-rerun-btn').style.display = 'none';
-                fetch('/api/rebuild?target=' + enc(target), {method: 'POST'})
+                fetch('/api/rebuild?target=' + enc(target) + (project ? '&project=' + enc(project) : ''), {method: 'POST'})
                   .then(r => r.json())
                   .then(({buildId, error}) => {
                     if (error) throw new Error(error);
-                    openLog('all projects', 'rebuild ' + target, buildId, null);
+                    openLog(title, 'rebuild ' + target, buildId, null);
                     schedulePoll(btn, buildId);
                   })
                   .catch(e => {
                     btn.disabled = false;
                     btn.textContent = '\u21bb Rebuild';
-                    openLog('all projects', 'rebuild ' + target, '?', {running: false, exitCode: -1,
+                    openLog(title, 'rebuild ' + target, '?', {running: false, exitCode: -1,
                       output: 'Failed to start the rebuild: ' + e.message});
                   });
               }
@@ -876,13 +886,7 @@ public class PortalResource {
                   document.getElementById('log-rerun-btn').style.display = '';
                 }
                 // Refresh the project list so a new Javadoc tag appears without a page reload.
-                // A rebuild has already rebuilt the indexes; after one project's Docs, reindex first.
-                if (btn.dataset.task === 'rebuild') {
-                  loadProjects(currentPage, currentFilter);
-                } else if (s.exitCode === 0 && btn.dataset.task === 'docs') {
-                  fetch('/api/reindex', {method: 'POST'})
-                    .then(() => loadProjects(currentPage, currentFilter));
-                }
+                if (btn.dataset.task === 'rebuild') loadProjects(currentPage, currentFilter);
               }
 
               function openLog(project, task, buildId, status) {

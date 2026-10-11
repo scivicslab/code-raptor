@@ -9,10 +9,12 @@ import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.StoredField;
+import org.apache.lucene.document.StringField;
 import org.apache.lucene.document.TextField;
 import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.index.Term;
 import org.apache.lucene.queryparser.classic.MultiFieldQueryParser;
 import org.apache.lucene.queryparser.classic.ParseException;
 import org.apache.lucene.queryparser.classic.QueryParser;
@@ -74,18 +76,7 @@ public class ProjectIndexer {
                              .setOpenMode(IndexWriterConfig.OpenMode.CREATE))) {
 
             for (ProjectInfo p : projects) {
-                Document doc = new Document();
-                // Indexed + stored fields (used for search ranking and retrieval)
-                doc.add(new TextField("name",        p.name(),        Field.Store.YES));
-                doc.add(new TextField("language",    p.language(),    Field.Store.YES));
-                doc.add(new TextField("buildSystem", p.buildSystem(), Field.Store.YES));
-                doc.add(new TextField("groupId",     p.groupId(),     Field.Store.YES));
-                doc.add(new TextField("artifactId",  p.artifactId(),  Field.Store.YES));
-                doc.add(new TextField("version",     p.version(),     Field.Store.YES));
-                // Stored-only fields (metadata flags, not indexed)
-                doc.add(new StoredField("compiledDocs", p.compiledDocs()));
-                doc.add(new StoredField("isMaven",       p.isMaven() ? "1" : "0"));
-                writer.addDocument(doc);
+                writer.addDocument(toDocument(p));
             }
 
             LOG.infof("Project index built: %d projects", projects.size());
@@ -93,6 +84,45 @@ public class ProjectIndexer {
         } catch (IOException e) {
             LOG.errorf(e, "Failed to build project index");
         }
+    }
+
+    /**
+     * Replaces one project's entry in the index (adds it when absent), leaving the others.
+     *
+     * @return false when the index could not be written
+     */
+    public boolean updateProject(ProjectInfo project) {
+        Path indexDir = config.getDataDir().resolve("projects-index");
+        try (Directory dir     = FSDirectory.open(indexDir);
+             StandardAnalyzer analyzer = new StandardAnalyzer();
+             IndexWriter writer = new IndexWriter(dir,
+                     new IndexWriterConfig(analyzer)
+                             .setOpenMode(IndexWriterConfig.OpenMode.CREATE_OR_APPEND))) {
+            writer.updateDocument(new Term(KEY_FIELD, project.name()), toDocument(project));
+            return true;
+        } catch (IOException e) {
+            LOG.errorf(e, "Failed to update project %s in the project index", project.name());
+            return false;
+        }
+    }
+
+    /** Exact project name, so that one project's entry can be found and replaced. */
+    private static final String KEY_FIELD = "key";
+
+    private static Document toDocument(ProjectInfo p) {
+        Document doc = new Document();
+        doc.add(new StringField(KEY_FIELD, p.name(), Field.Store.NO));
+        // Indexed + stored fields (used for search ranking and retrieval)
+        doc.add(new TextField("name",        p.name(),        Field.Store.YES));
+        doc.add(new TextField("language",    p.language(),    Field.Store.YES));
+        doc.add(new TextField("buildSystem", p.buildSystem(), Field.Store.YES));
+        doc.add(new TextField("groupId",     p.groupId(),     Field.Store.YES));
+        doc.add(new TextField("artifactId",  p.artifactId(),  Field.Store.YES));
+        doc.add(new TextField("version",     p.version(),     Field.Store.YES));
+        // Stored-only fields (metadata flags, not indexed)
+        doc.add(new StoredField("compiledDocs", p.compiledDocs()));
+        doc.add(new StoredField("isMaven",       p.isMaven() ? "1" : "0"));
+        return doc;
     }
 
     // ── Search ────────────────────────────────────────────────────────────────

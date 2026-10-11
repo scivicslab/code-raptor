@@ -8,10 +8,12 @@ import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.StoredField;
+import org.apache.lucene.document.StringField;
 import org.apache.lucene.document.TextField;
 import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.index.Term;
 import org.apache.lucene.queryparser.classic.MultiFieldQueryParser;
 import org.apache.lucene.queryparser.classic.ParseException;
 import org.apache.lucene.search.IndexSearcher;
@@ -79,7 +81,7 @@ public class JavadocIndexer {
                     continue;
                 }
                 Path apidocs = project.resolve(javadocDir);
-                int count = indexApidocsDir(writer, apidocs);
+                int count = indexApidocsDir(writer, apidocs, project.getFileName().toString());
                 if (count > 0) {
                     LOG.infof("  Indexed %d Javadoc page(s) from %s", count, project.getFileName());
                     totalFiles += count;
@@ -101,13 +103,47 @@ public class JavadocIndexer {
      *
      * @return number of files indexed
      */
-    private int indexApidocsDir(IndexWriter writer, Path apidocs) throws IOException {
+    /**
+     * Replaces one project's pages in the index with the Javadoc HTML now on disk, leaving the
+     * other projects' pages.
+     *
+     * @return the number of pages now indexed for the project, or -1 when the index could not be written
+     */
+    public int updateProject(Path project) {
+        Path indexDir = config.getDataDir().resolve("javadoc-index");
+        String name = project.getFileName().toString();
+        try {
+            Files.createDirectories(indexDir);
+        } catch (IOException e) {
+            LOG.errorf(e, "Cannot create index directory: %s", indexDir);
+            return -1;
+        }
+        try (FSDirectory dir = FSDirectory.open(indexDir);
+             StandardAnalyzer analyzer = new StandardAnalyzer();
+             IndexWriter writer = new IndexWriter(dir,
+                     new IndexWriterConfig(analyzer)
+                             .setOpenMode(IndexWriterConfig.OpenMode.CREATE_OR_APPEND))) {
+            writer.deleteDocuments(new Term(PROJECT_FIELD, name));
+            String javadocDir = ProjectInfoReader.javadocDir(project);
+            int count = javadocDir.isEmpty() ? 0 : indexApidocsDir(writer, project.resolve(javadocDir), name);
+            writer.commit();
+            return count;
+        } catch (IOException e) {
+            LOG.errorf(e, "Failed to update the Javadoc index for %s", name);
+            return -1;
+        }
+    }
+
+    /** Exact project directory name, so that one project's pages can be found and replaced. */
+    private static final String PROJECT_FIELD = "project";
+
+    private int indexApidocsDir(IndexWriter writer, Path apidocs, String project) throws IOException {
         int count = 0;
         try (Stream<Path> walk = Files.walk(apidocs)) {
             for (Path file : (Iterable<Path>) walk.filter(Files::isRegularFile)
                     .filter(p -> p.toString().endsWith(".html"))::iterator) {
                 try {
-                    indexHtmlFile(writer, file);
+                    indexHtmlFile(writer, file, project);
                     count++;
                 } catch (IOException e) {
                     LOG.debugf("Skipping %s: %s", file, e.getMessage());
@@ -117,7 +153,7 @@ public class JavadocIndexer {
         return count;
     }
 
-    private void indexHtmlFile(IndexWriter writer, Path htmlFile) throws IOException {
+    private void indexHtmlFile(IndexWriter writer, Path htmlFile, String project) throws IOException {
         org.jsoup.nodes.Document jsoupDoc = Jsoup.parse(htmlFile.toFile(), "UTF-8");
 
         String title = jsoupDoc.title();
@@ -129,6 +165,7 @@ public class JavadocIndexer {
         }
 
         Document luceneDoc = new Document();
+        luceneDoc.add(new StringField(PROJECT_FIELD, project, Field.Store.NO));
         luceneDoc.add(new StoredField("url", url));
         luceneDoc.add(new Field("title", title, TextField.TYPE_STORED));
         luceneDoc.add(new Field("content", bodyText, TextField.TYPE_STORED));
