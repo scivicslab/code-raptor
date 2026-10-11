@@ -50,25 +50,54 @@ public class IndexService {
      * Safe to call concurrently (each call rebuilds from scratch).
      */
     public void reindex() {
-        Path worksDir = config.getWorksDir();
         LOG.info("=== Reindex started ===");
-
-        List<Path> projectDirs = scanner.scanCodeProjects(worksDir);
-
-        // Build gtags symbol index (needs raw paths)
-        gtagsIndexer.buildIndex(worksDir);
-
-        // Convert paths → ProjectInfo (shared by both Lucene indexes)
-        List<ProjectInfo> projects = projectDirs.stream()
-                .map(infoReader::read)
-                .toList();
-
-        // Build Lucene project-metadata index (powers GET /api/projects?q=...)
-        projectIndexer.buildIndex(projects);
-
-        // Build Lucene Javadoc index (powers GET /api/javadoc?q=...)
-        javadocIndexer.buildIndex(projectDirs);
-
+        rebuildSymbolIndex();
+        rebuildProjectIndex();
+        rebuildJavadocIndex();
         LOG.info("=== Reindex complete ===");
+    }
+
+    /** The directory the projects are in. */
+    public Path worksDir() {
+        return config.getWorksDir();
+    }
+
+    /** The code project directories under works-dir. */
+    public List<Path> codeProjects() {
+        return scanner.scanCodeProjects(config.getWorksDir());
+    }
+
+    /**
+     * Rebuilds the gtags files in works-dir (powers GET /api/symbol).
+     *
+     * @return one line saying what was done
+     */
+    public String rebuildSymbolIndex() {
+        return gtagsIndexer.buildIndex(config.getWorksDir());
+    }
+
+    /**
+     * Rebuilds the Lucene project-metadata index (powers GET /api/projects?q=...).
+     *
+     * @return one line saying what was done
+     */
+    public String rebuildProjectIndex() {
+        List<ProjectInfo> projects = codeProjects().stream().map(infoReader::read).toList();
+        projectIndexer.buildIndex(projects);
+        return "project list index: " + projects.size() + " project(s)";
+    }
+
+    /**
+     * Rebuilds the Lucene Javadoc index from the Javadoc HTML already on disk
+     * (powers GET /api/javadoc?q=...).
+     *
+     * @return one line saying what was done
+     */
+    public String rebuildJavadocIndex() {
+        List<Path> projectDirs = codeProjects();
+        javadocIndexer.buildIndex(projectDirs);
+        long withJavadoc = projectDirs.stream()
+                .filter(dir -> !ProjectInfoReader.javadocDir(dir).isEmpty()).count();
+        return "Javadoc index: " + withJavadoc + " project(s) with Javadoc";
     }
 }

@@ -28,8 +28,9 @@ public class GtagsIndexer {
      * excluding documentation project directories (those starting with {@code doc_}).
      *
      * @param worksDir root directory where the GTAGS index will be placed
+     * @return one line saying what was done, for a person watching the rebuild
      */
-    public void buildIndex(Path worksDir) {
+    public String buildIndex(Path worksDir) {
         LOG.info("Building gtags index...");
 
         // Collect source files via Java (avoids shell pipe/grep complexity)
@@ -38,7 +39,7 @@ public class GtagsIndexer {
 
         if (sourceFiles.isEmpty()) {
             LOG.warn("No source files found; skipping gtags.");
-            return;
+            return "gtags skipped: no source files found";
         }
 
         // Write file list to a temp file
@@ -48,7 +49,7 @@ public class GtagsIndexer {
             Files.write(fileList, sourceFiles.stream().map(Path::toString).toList());
         } catch (IOException e) {
             LOG.errorf(e, "Failed to create gtags file list");
-            return;
+            return "gtags failed: cannot write the file list: " + e.getMessage();
         }
 
         // Run: gtags --accept-dotfiles -f <fileList>  (working directory = worksDir)
@@ -64,14 +65,16 @@ public class GtagsIndexer {
 
             if (exitCode == 0) {
                 LOG.info("gtags index built successfully.");
-            } else {
-                LOG.warnf("gtags exited with code %d. Output: %s", exitCode, output);
+                return "gtags indexed " + sourceFiles.size() + " source file(s)";
             }
+            LOG.warnf("gtags exited with code %d. Output: %s", exitCode, output);
+            return "gtags failed with exit code " + exitCode + ": " + output.strip();
         } catch (IOException | InterruptedException e) {
             LOG.errorf(e, "Failed to run gtags");
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
+            return "gtags failed: " + e.getMessage();
         } finally {
             try {
                 Files.deleteIfExists(fileList);

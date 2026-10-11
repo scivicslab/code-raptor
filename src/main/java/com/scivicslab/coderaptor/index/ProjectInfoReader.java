@@ -122,7 +122,7 @@ public class ProjectInfoReader {
     // or an empty string if no compiled docs are found.
     //
     // Checked paths (in order):
-    //   Java/Maven  : target/site/apidocs   (mvn javadoc:javadoc)
+    //   Java/Maven  : target/site/apidocs or target/reports/apidocs (see javadocDir)
     //   Rust        : target/doc            (cargo doc)
     //   Python/Sphinx: docs/_build/html
     //   Python/MkDocs: site
@@ -130,9 +130,10 @@ public class ProjectInfoReader {
     //   C/C++/Doxygen: doc/html, docs/html, html
 
     private static String detectCompiledDocs(Path dir, String language) {
+        String javadoc = javadocDir(dir);
         // Language-specific paths first (faster short-circuit)
         if ("Java".equals(language) || "Kotlin".equals(language)) {
-            if (isDir(dir, "target/site/apidocs")) return "target/site/apidocs";
+            if (!javadoc.isEmpty()) return javadoc;
         }
         if ("Rust".equals(language)) {
             if (isDir(dir, "target/doc")) return "target/doc";
@@ -152,11 +153,37 @@ public class ProjectInfoReader {
             if (isDir(dir, "docs")) return "docs";
         }
         // Generic fallbacks (language unknown or mixed projects)
-        if (isDir(dir, "target/site/apidocs")) return "target/site/apidocs";
+        if (!javadoc.isEmpty()) return javadoc;
         if (isDir(dir, "target/doc"))          return "target/doc";
         if (isDir(dir, "docs/_build/html"))    return "docs/_build/html";
         return "";
     }
+
+    /**
+     * Where the project's Javadoc HTML is, relative to the project; empty when it has none.
+     *
+     * <p>{@code maven-javadoc-plugin} writes to {@code target/site/apidocs} or, from 3.10 on,
+     * {@code target/reports/apidocs}. A project can hold both after the plugin version changes;
+     * the one whose {@code index.html} was written last is the current one.
+     */
+    public static String javadocDir(Path projectDir) {
+        String newest = "";
+        long newestTime = Long.MIN_VALUE;
+        for (String candidate : JAVADOC_DIRS) {
+            Path index = projectDir.resolve(candidate).resolve("index.html");
+            if (!Files.isDirectory(projectDir.resolve(candidate))) continue;
+            long time;
+            try {
+                time = Files.exists(index) ? Files.getLastModifiedTime(index).toMillis() : Long.MIN_VALUE + 1;
+            } catch (IOException e) {
+                time = Long.MIN_VALUE + 1;
+            }
+            if (time > newestTime) { newest = candidate; newestTime = time; }
+        }
+        return newest;
+    }
+
+    private static final String[] JAVADOC_DIRS = {"target/site/apidocs", "target/reports/apidocs"};
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 

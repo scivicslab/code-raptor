@@ -350,7 +350,14 @@ public class PortalResource {
                 <p id="project-count-header">Cross-project symbol &amp; Javadoc search</p>
               </div>
               <div class="search-forms">
-                <button class="btn" id="reindex-btn" onclick="doReindex(this)" title="Rebuild indexes">Reindex</button>
+                <select id="rebuild-target" class="page-size" title="What to rebuild for every project">
+                  <option value="symbol">Symbol</option>
+                  <option value="javadoc">Javadoc</option>
+                  <option value="projects">Projects</option>
+                  <option value="all">All</option>
+                </select>
+                <button class="btn" id="rebuild-btn" data-task="rebuild" onclick="doRebuild(this)"
+                        title="Rebuild what the selected search reads, for every project">&#8635; Rebuild</button>
               </div>
             </header>
 
@@ -761,17 +768,29 @@ public class PortalResource {
               function setPageSize(n) { pageSize = n; loadProjects(0, currentFilter); }
               function filterProjects(q) { clearTimeout(filterTimer); filterTimer = setTimeout(() => loadProjects(0, q), 300); }
 
-              // ── Reindex ────────────────────────────────────────────────────
-              async function doReindex(btn) {
-                btn.disabled = true; btn.textContent = 'Reindexing…';
-                try {
-                  await fetch('/api/reindex', {method:'POST'});
-                  btn.textContent = 'Done ✓';
-                  setTimeout(() => { btn.textContent = 'Reindex'; btn.disabled = false; loadProjects(0, currentFilter); }, 2000);
-                } catch(e) {
-                  btn.textContent = 'Error';
-                  setTimeout(() => { btn.textContent = 'Reindex'; btn.disabled = false; }, 3000);
-                }
+              // ── Rebuild for every project ──────────────────────────────────
+              // Symbol: gtags files. Javadoc: each project's Docs, then the Javadoc index.
+              // Projects: the project list index. All: the three. The log shows in the right pane.
+              function doRebuild(btn) {
+                const target = document.getElementById('rebuild-target').value;
+                btn.disabled = true;
+                btn.textContent = '\u2026';
+                btn.classList.remove('build-btn-ok', 'build-btn-err');
+                lastBuildBtn = btn;
+                document.getElementById('log-rerun-btn').style.display = 'none';
+                fetch('/api/rebuild?target=' + enc(target), {method: 'POST'})
+                  .then(r => r.json())
+                  .then(({buildId, error}) => {
+                    if (error) throw new Error(error);
+                    openLog('all projects', 'rebuild ' + target, buildId, null);
+                    schedulePoll(btn, buildId);
+                  })
+                  .catch(e => {
+                    btn.disabled = false;
+                    btn.textContent = '\u21bb Rebuild';
+                    openLog('all projects', 'rebuild ' + target, '?', {running: false, exitCode: -1,
+                      output: 'Failed to start the rebuild: ' + e.message});
+                  });
               }
 
               // ── Build panel ──────────────────────────────────────────────────
@@ -834,7 +853,8 @@ public class PortalResource {
                 btn.disabled = false;
                 btn.classList.remove('build-btn-running');
                 // Derive label from data-task so re-runs never accumulate ✓/✗ prefixes
-                const label = btn.dataset.task.charAt(0).toUpperCase() + btn.dataset.task.slice(1);
+                const label = btn.dataset.task === 'rebuild' ? '\u21bb Rebuild'
+                            : btn.dataset.task.charAt(0).toUpperCase() + btn.dataset.task.slice(1);
                 if (s.exitCode === 0) {
                   btn.textContent = '\\u2713 ' + label;
                   btn.classList.add('build-btn-ok');
@@ -851,9 +871,11 @@ public class PortalResource {
                   out.scrollTop = out.scrollHeight;
                   document.getElementById('log-rerun-btn').style.display = '';
                 }
-                // After successful docs build: reindex then refresh project list
-                // so the Javadoc tag appears immediately without a manual page reload.
-                if (s.exitCode === 0 && btn.dataset.task === 'docs') {
+                // Refresh the project list so a new Javadoc tag appears without a page reload.
+                // A rebuild has already rebuilt the indexes; after one project's Docs, reindex first.
+                if (btn.dataset.task === 'rebuild') {
+                  loadProjects(currentPage, currentFilter);
+                } else if (s.exitCode === 0 && btn.dataset.task === 'docs') {
                   fetch('/api/reindex', {method: 'POST'})
                     .then(() => loadProjects(currentPage, currentFilter));
                 }
@@ -889,7 +911,8 @@ public class PortalResource {
                 lastBuildBtn.textContent = lastBuildBtn.dataset.origLabel || lastBuildBtn.dataset.task;
                 lastBuildBtn.classList.remove('build-btn-ok', 'build-btn-err');
                 document.getElementById('log-rerun-btn').style.display = 'none';
-                doBuild(lastBuildBtn);
+                if (lastBuildBtn.dataset.task === 'rebuild') doRebuild(lastBuildBtn);
+                else doBuild(lastBuildBtn);
               }
 
               // ── Pane divider ───────────────────────────────────────────────

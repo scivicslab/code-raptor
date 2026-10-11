@@ -31,8 +31,8 @@ import java.util.List;
 import java.util.stream.Stream;
 
 /**
- * Builds a Lucene full-text index over Javadoc HTML files found in
- * {@code <project>/target/site/apidocs/} for every code project.
+ * Builds a Lucene full-text index over the Javadoc HTML files of every code project
+ * (the directory {@link ProjectInfoReader#javadocDir} names).
  *
  * <p>Index location: {@code <works-dir>/.code-raptor/javadoc-index/}
  */
@@ -51,8 +51,7 @@ public class JavadocIndexer {
     // -------------------------------------------------------------------------
 
     /**
-     * (Re)builds the Lucene index from all Javadoc HTML files found under
-     * {@code <project>/target/site/apidocs/} for each supplied project.
+     * (Re)builds the Lucene index from the Javadoc HTML files of each supplied project.
      *
      * @param projects list of code project directories
      */
@@ -75,10 +74,11 @@ public class JavadocIndexer {
                              .setOpenMode(IndexWriterConfig.OpenMode.CREATE))) {
 
             for (Path project : projects) {
-                Path apidocs = project.resolve("target/site/apidocs");
-                if (!Files.isDirectory(apidocs)) {
+                String javadocDir = ProjectInfoReader.javadocDir(project);
+                if (javadocDir.isEmpty()) {
                     continue;
                 }
+                Path apidocs = project.resolve(javadocDir);
                 int count = indexApidocsDir(writer, apidocs);
                 if (count > 0) {
                     LOG.infof("  Indexed %d Javadoc page(s) from %s", count, project.getFileName());

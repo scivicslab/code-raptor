@@ -18,6 +18,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * Manages asynchronous project build jobs using POJO-actor.
@@ -119,33 +121,80 @@ public class BuildService {
         return Optional.of(ref.ask(BuildJob::toStatus).join());
     }
 
+    /**
+     * Starts a job whose output and outcome are shown like a build's, and returns its ID
+     * immediately. {@code work} runs in the build pool, writes lines through the given
+     * consumer, and returns the exit code to report (0 = success).
+     */
+    public String startJob(String project, String task, Function<Consumer<String>, Integer> work) {
+        String id = "b" + seq.incrementAndGet();
+        ActorRef<BuildJob> ref = system.actorOf(id, new BuildJob(id, project, task));
+        pool.submit(() -> {
+            int code;
+            try {
+                code = work.apply(line -> ref.tell(j -> j.appendLine(line)));
+            } catch (RuntimeException e) {
+                ref.tell(j -> j.appendLine("[Error: " + e.getMessage() + "]"));
+                LOG.errorf(e, "Job %s failed with exception", id);
+                code = -1;
+            }
+            int exit = code;
+            ref.tell(j -> j.finish(exit));
+        });
+        return id;
+    }
+
+    /** True when the build system has a command for the Docs button. */
+    public boolean hasDocs(String buildSystem) {
+        return command(buildSystem, "docs") != null;
+    }
+
+    /**
+     * Runs the Docs command of one project in the calling thread at the lowest CPU priority,
+     * so that running it for every project leaves the machine usable.
+     *
+     * @return the command's exit code, or -1 when it could not be run
+     */
+    public int runDocs(Path projectDir, String buildSystem, Consumer<String> out) {
+        String[] cmd = command(buildSystem, "docs");
+        if (cmd == null) return -1;
+        String[] niced = new String[cmd.length + 3];
+        niced[0] = "nice"; niced[1] = "-n"; niced[2] = "19";
+        System.arraycopy(cmd, 0, niced, 3, cmd.length);
+        return runCommand(niced, projectDir, out);
+    }
+
     // ── Process runner ────────────────────────────────────────────────────────
 
     private void runProcess(ActorRef<BuildJob> ref, String[] cmd, Path dir, String id) {
+        // Each tell() is queued; ask() from the REST thread is also queued →
+        // no race condition, no volatile needed in BuildJob.
+        int code = runCommand(cmd, dir, line -> ref.tell(j -> j.appendLine(line)));
+        ref.tell(j -> j.finish(code));
+        LOG.infof("Build finished: id=%s  exitCode=%d", id, code);
+    }
+
+    /** Runs a command in {@code dir}, passing each output line to {@code out}; returns the exit code. */
+    private static int runCommand(String[] cmd, Path dir, Consumer<String> out) {
         try {
             ProcessBuilder pb = new ProcessBuilder(cmd);
             pb.directory(dir.toFile());
             pb.redirectErrorStream(true);
             Process process = pb.start();
-
             try (BufferedReader br =
                          new BufferedReader(new InputStreamReader(process.getInputStream()))) {
                 String line;
-                while ((line = br.readLine()) != null) {
-                    final String l = line;
-                    // Each tell() is queued; ask() from the REST thread is also queued →
-                    // no race condition, no volatile needed in BuildJob.
-                    ref.tell(j -> j.appendLine(l));
-                }
+                while ((line = br.readLine()) != null) out.accept(line);
             }
-            int code = process.waitFor();
-            ref.tell(j -> j.finish(code));
-            LOG.infof("Build finished: id=%s  exitCode=%d", id, code);
-
-        } catch (IOException | InterruptedException e) {
-            ref.tell(j -> j.appendLine("[Build error: " + e.getMessage() + "]"));
-            ref.tell(j -> j.finish(-1));
-            LOG.errorf(e, "Build job %s failed with exception", id);
+            return process.waitFor();
+        } catch (IOException e) {
+            out.accept("[Build error: " + e.getMessage() + "]");
+            LOG.errorf(e, "Command %s failed in %s", String.join(" ", cmd), dir);
+            return -1;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            out.accept("[Build interrupted]");
+            return -1;
         }
     }
 
@@ -157,9 +206,13 @@ public class BuildService {
         return switch (buildSystem) {
             case "Maven" -> switch (task) {
                 case "build" -> new String[]{"bash", "-c", "rm -rf target && mvn install"};
+                // aggregate puts the Javadoc of every module of a multi-module project into one
+                // tree at the project root, where the Javadoc index and /docs look; for a
+                // single-module project it is the same as javadoc:javadoc. doclint=none keeps a
+                // dangling {@link} from stopping the whole run.
                 case "docs"  -> new String[]{"bash", "-c",
                         "JAVA_TOOL_OPTIONS='-Duser.language=en -Duser.country=US'" +
-                        " mvn javadoc:javadoc -Dlocale=en_US"};
+                        " mvn -B javadoc:aggregate -Dlocale=en_US -Ddoclint=none"};
                 default -> null;
             };
             case "Gradle" -> switch (task) {
