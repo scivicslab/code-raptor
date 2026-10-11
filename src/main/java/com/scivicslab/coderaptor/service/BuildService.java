@@ -209,10 +209,13 @@ public class BuildService {
                 // aggregate puts the Javadoc of every module of a multi-module project into one
                 // tree at the project root, where the Javadoc index and /docs look; for a
                 // single-module project it is the same as javadoc:javadoc. doclint=none keeps a
-                // dangling {@link} from stopping the whole run.
+                // dangling {@link} from stopping the whole run. disableNoFonts: plugin 3.12 passes
+                // --no-fonts by default, yet the stylesheet JDK 23+ writes still imports
+                // fonts/dejavu.css, so every page would ask /docs for a file that is not there.
                 case "docs"  -> new String[]{"bash", "-c",
                         "JAVA_TOOL_OPTIONS='-Duser.language=en -Duser.country=US'" +
-                        " mvn -B javadoc:aggregate -Dlocale=en_US -Ddoclint=none"};
+                        " mvn -B javadoc:aggregate -Dlocale=en_US -Ddoclint=none" +
+                        " -Dmaven.javadoc.disableNoFonts=true"};
                 default -> null;
             };
             case "Gradle" -> switch (task) {
