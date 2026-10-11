@@ -28,6 +28,12 @@ public class JavadocResource {
     @Inject
     com.scivicslab.coderaptor.activity.ServedLog servedLog;
 
+    @Inject
+    com.scivicslab.coderaptor.config.CodeRaptorConfig config;
+
+    @Inject
+    com.scivicslab.coderaptor.index.ProjectInfoReader infoReader;
+
     @GET
     @Produces(MediaType.APPLICATION_JSON)
     public List<JavadocHit> search(@QueryParam("q") String query) {
@@ -35,6 +41,12 @@ public class JavadocResource {
             return Collections.emptyList();
         }
         servedLog.note("javadoc?q=" + query, "Searching the Javadoc for \"" + query + "\"");
-        return indexer.search(query);
+        // Each hit names a file on disk; the page links to it through /docs, which serves it.
+        java.nio.file.Path works = config.getWorksDir();
+        return indexer.search(query).stream()
+                .map(h -> h.withDocsUrl(JavadocLink.docsUrl(works,
+                        h.url() == null ? null : java.nio.file.Path.of(h.url()),
+                        projectDir -> infoReader.read(projectDir).compiledDocs())))
+                .toList();
     }
 }

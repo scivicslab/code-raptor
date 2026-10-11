@@ -155,6 +155,8 @@ public class PortalResource {
                 .result-row { padding: 8px 14px; border-bottom: 1px solid var(--border); font-size: 0.85rem; }
                 .result-row:last-child { border-bottom: none; }
                 .hit-title { font-weight: 700; color: var(--text-primary); }
+                .hit-title a { color: var(--text-primary); text-decoration: none; }
+                .hit-title a:hover { color: var(--accent2); text-decoration: underline; }
                 .hit-url { font-family: 'SFMono-Regular', Consolas, monospace; color: var(--accent2); font-size: 0.78rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
                 .hit-snippet { color: var(--text-secondary); font-size: 0.8rem; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
@@ -402,7 +404,9 @@ public class PortalResource {
                   document.getElementById('javadoc-count').textContent = hits.length;
                   if (hits.length === 0) { setInner('javadoc-results', '<div class="status-row">No results found.</div>'); return; }
                   setInner('javadoc-results', '<div class="result-list">' + hits.map(h =>
-                    '<div class="result-row"><div class="hit-title">' + esc(h.title) + '</div>' +
+                    '<div class="result-row"><div class="hit-title">' +
+                      (h.docsUrl ? '<a href="' + esc(h.docsUrl) + '" target="_blank">' + esc(h.title) + '</a>' : esc(h.title)) +
+                    '</div>' +
                     '<div class="hit-url">' + esc(shortPath(h.url)) + '</div>' +
                     (h.snippet ? '<div class="hit-snippet">' + esc(h.snippet.slice(0,200)) + '</div>' : '') +
                     '</div>'

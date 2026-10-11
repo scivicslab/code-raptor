@@ -188,7 +188,7 @@ public class JavadocIndexer {
                 String snippet = content != null && content.length() > SNIPPET_LENGTH
                         ? content.substring(0, SNIPPET_LENGTH) + "..."
                         : content;
-                hits.add(new JavadocHit(title, url, snippet));
+                hits.add(new JavadocHit(title, url, snippet, null));
             }
 
             return hits;
