@@ -44,6 +44,18 @@ public class BuildResource {
         }
     }
 
+    /** POST /api/build/b1/stop — stops the job; its status then reports {@code "stopped": true}. */
+    @POST
+    @Path("{id}/stop")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response stop(@PathParam("id") String id) {
+        return buildService.stop(id)
+                ? Response.ok(Map.of("stopping", true)).build()
+                : Response.status(Response.Status.NOT_FOUND)
+                        .entity(Map.of("error", "Build job not found: " + id))
+                        .build();
+    }
+
     @GET
     @Path("{id}")
     @Produces(MediaType.APPLICATION_JSON)

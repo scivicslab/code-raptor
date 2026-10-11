@@ -122,17 +122,46 @@ public class BuildService {
     }
 
     /**
-     * Starts a job whose output and outcome are shown like a build's, and returns its ID
-     * immediately. {@code work} runs in the build pool, writes lines through the given
-     * consumer, and returns the exit code to report (0 = success).
+     * Asks a running job to stop: the command it is running ends together with the processes
+     * the command started, and a rebuild does not go on to its next step.
+     *
+     * @return false when there is no such job
      */
-    public String startJob(String project, String task, Function<Consumer<String>, Integer> work) {
+    public boolean stop(String id) {
+        if (!system.isAlive(id)) return false;
+        ActorRef<BuildJob> ref = system.getActor(id);
+        ref.tell(BuildJob::stop);
+        LOG.infof("Stop requested: id=%s", id);
+        return true;
+    }
+
+    /** What a job's work sees of its job: where its lines go, and whether it was asked to stop. */
+    public static final class JobContext {
+        private final ActorRef<BuildJob> ref;
+
+        private JobContext(ActorRef<BuildJob> ref) { this.ref = ref; }
+
+        /** Appends a line to the job's output. */
+        public void line(String line) { ref.tell(j -> j.appendLine(line)); }
+
+        /** True once someone asked the job to stop. */
+        public boolean stopRequested() { return ref.ask(BuildJob::stopRequested).join(); }
+
+        private void started(Process process) { ref.tell(j -> j.attach(process)); }
+    }
+
+    /**
+     * Starts a job whose output and outcome are shown like a build's, and returns its ID
+     * immediately. {@code work} runs in the build pool, writes lines through the context,
+     * and returns the exit code to report (0 = success).
+     */
+    public String startJob(String project, String task, Function<JobContext, Integer> work) {
         String id = "b" + seq.incrementAndGet();
         ActorRef<BuildJob> ref = system.actorOf(id, new BuildJob(id, project, task));
         pool.submit(() -> {
             int code;
             try {
-                code = work.apply(line -> ref.tell(j -> j.appendLine(line)));
+                code = work.apply(new JobContext(ref));
             } catch (RuntimeException e) {
                 ref.tell(j -> j.appendLine("[Error: " + e.getMessage() + "]"));
                 LOG.errorf(e, "Job %s failed with exception", id);
@@ -155,13 +184,13 @@ public class BuildService {
      *
      * @return the command's exit code, or -1 when it could not be run
      */
-    public int runDocs(Path projectDir, String buildSystem, Consumer<String> out) {
+    public int runDocs(Path projectDir, String buildSystem, JobContext job, Consumer<String> out) {
         String[] cmd = command(buildSystem, "docs");
         if (cmd == null) return -1;
         String[] niced = new String[cmd.length + 3];
         niced[0] = "nice"; niced[1] = "-n"; niced[2] = "19";
         System.arraycopy(cmd, 0, niced, 3, cmd.length);
-        return runCommand(niced, projectDir, out);
+        return runCommand(niced, projectDir, out, job::started);
     }
 
     // ── Process runner ────────────────────────────────────────────────────────
@@ -169,18 +198,23 @@ public class BuildService {
     private void runProcess(ActorRef<BuildJob> ref, String[] cmd, Path dir, String id) {
         // Each tell() is queued; ask() from the REST thread is also queued →
         // no race condition, no volatile needed in BuildJob.
-        int code = runCommand(cmd, dir, line -> ref.tell(j -> j.appendLine(line)));
+        int code = runCommand(cmd, dir, line -> ref.tell(j -> j.appendLine(line)),
+                process -> ref.tell(j -> j.attach(process)));
         ref.tell(j -> j.finish(code));
         LOG.infof("Build finished: id=%s  exitCode=%d", id, code);
     }
 
-    /** Runs a command in {@code dir}, passing each output line to {@code out}; returns the exit code. */
-    private static int runCommand(String[] cmd, Path dir, Consumer<String> out) {
+    /**
+     * Runs a command in {@code dir}, passing each output line to {@code out}, and hands the started
+     * process to {@code started} so that the job can end it; returns the exit code.
+     */
+    private static int runCommand(String[] cmd, Path dir, Consumer<String> out, Consumer<Process> started) {
         try {
             ProcessBuilder pb = new ProcessBuilder(cmd);
             pb.directory(dir.toFile());
             pb.redirectErrorStream(true);
             Process process = pb.start();
+            started.accept(process);
             try (BufferedReader br =
                          new BufferedReader(new InputStreamReader(process.getInputStream()))) {
                 String line;
@@ -285,6 +319,9 @@ public class BuildService {
         private       int           exitCode  = -1;
         private final StringBuilder output    = new StringBuilder();
         private       boolean       truncated = false;
+        private       boolean       stopRequested = false;
+        /** The command the job is running now, if any. */
+        private       Process       process;
 
         BuildJob(String id, String project, String task) {
             this.id = id; this.project = project; this.task = task;
@@ -302,6 +339,30 @@ public class BuildService {
         void finish(int code) {
             running  = false;
             exitCode = code;
+            process  = null;
+        }
+
+        boolean stopRequested() {
+            return stopRequested;
+        }
+
+        /** Records the command now running; ends it at once if a stop came first. */
+        void attach(Process p) {
+            process = p;
+            if (stopRequested) end(p);
+        }
+
+        void stop() {
+            if (!running || stopRequested) return;
+            stopRequested = true;
+            appendLine("[Stop requested]");
+            if (process != null) end(process);
+        }
+
+        /** Ends the command and everything it started: bash → nice → mvn → javadoc. */
+        private static void end(Process p) {
+            p.descendants().forEach(ProcessHandle::destroy);
+            p.destroy();
         }
 
         /** Returns a JSON-serialisable snapshot of the current state. */
@@ -311,6 +372,7 @@ public class BuildService {
                     "project",  project,
                     "task",     task,
                     "running",  running,
+                    "stopped",  stopRequested,
                     "exitCode", exitCode,
                     "output",   output.toString()
             );

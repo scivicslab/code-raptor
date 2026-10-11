@@ -446,6 +446,8 @@ public class PortalResource {
                   <div class="log-header">
                     <span class="log-title" id="log-title">Build output</span>
                     <span class="log-status" id="log-status"></span>
+                    <button class="log-close" id="log-stop-btn" onclick="stopBuild(this)" style="display:none"
+                            title="End the running command and skip the remaining steps">&#9632; Stop</button>
                     <button class="log-rerun" id="log-rerun-btn" onclick="rerunBuild()" style="display:none">&#9654; Re-run</button>
                     <button class="log-close" onclick="closeLog()">&#10005; close</button>
                   </div>
@@ -865,7 +867,9 @@ public class PortalResource {
                 btn.dataset.done = '1';
                 if (logBuildId === s.id) {
                   document.getElementById('log-status').textContent =
-                    s.exitCode === 0 ? '\\u2713 done (exit 0)' : '\\u2717 failed (exit ' + s.exitCode + ')';
+                    s.stopped ? '\\u25a0 stopped'
+                    : s.exitCode === 0 ? '\\u2713 done (exit 0)' : '\\u2717 failed (exit ' + s.exitCode + ')';
+                  showStop(false);
                   const out = document.getElementById('build-log-output');
                   out.textContent = s.output || '(no output)';
                   out.scrollTop = out.scrollHeight;
@@ -893,12 +897,30 @@ public class PortalResource {
                   document.getElementById('build-log-output').textContent =
                     status.output || '(no output)';
                   rerunBtn.style.display = status.running ? 'none' : '';
+                  showStop(status.running);
                 } else {
                   statusEl.textContent = 'starting\\u2026';
                   document.getElementById('build-log-output').textContent = '';
                   rerunBtn.style.display = 'none';
+                  showStop(true);
                 }
                 showView('build');
+              }
+
+              function showStop(visible) {
+                const stopBtn = document.getElementById('log-stop-btn');
+                stopBtn.style.display = visible ? '' : 'none';
+                stopBtn.disabled = false;
+                stopBtn.innerHTML = '&#9632; Stop';
+              }
+
+              // Ends the command the shown job is running; a rebuild then skips its remaining steps.
+              function stopBuild(stopBtn) {
+                if (!logBuildId || logBuildId === '?') return;
+                stopBtn.disabled = true;
+                stopBtn.textContent = 'Stopping\\u2026';
+                fetch('/api/build/' + logBuildId + '/stop', {method: 'POST'})
+                  .catch(() => { stopBtn.disabled = false; stopBtn.innerHTML = '&#9632; Stop'; });
               }
 
               function closeLog() {

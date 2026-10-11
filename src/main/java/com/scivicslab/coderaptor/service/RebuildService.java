@@ -3,6 +3,7 @@ package com.scivicslab.coderaptor.service;
 import com.scivicslab.coderaptor.index.ProjectInfoReader;
 import com.scivicslab.coderaptor.model.ProjectInfo;
 import jakarta.enterprise.context.ApplicationScoped;
+import com.scivicslab.coderaptor.service.BuildService.JobContext;
 import jakarta.inject.Inject;
 
 import java.nio.file.Path;
@@ -11,7 +12,6 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.Locale;
-import java.util.function.Consumer;
 
 /**
  * Rebuilds, for every project at once, what one of the portal's searches reads.
@@ -26,7 +26,8 @@ import java.util.function.Consumer;
  *
  * <p>The rebuild runs as a build job, so the portal shows its lines in the same log view as a
  * Build or Docs. Only one rebuild runs at a time; asking for another while one runs returns the
- * running one's ID.
+ * running one's ID. A stop ({@link BuildService#stop}) ends the running command and skips the
+ * remaining steps, the index rebuilds included.
  */
 @ApplicationScoped
 public class RebuildService {
@@ -63,58 +64,76 @@ public class RebuildService {
             return lastRebuild;
         }
         String id = buildService.startJob("all projects",
-                "rebuild " + target.name().toLowerCase(Locale.ROOT), out -> run(target, out));
+                "rebuild " + target.name().toLowerCase(Locale.ROOT), job -> run(target, job));
         lastRebuild = id;
         return id;
     }
 
-    private int run(Target target, Consumer<String> out) {
+    /** Exit code reported for a rebuild that was stopped. */
+    private static final int STOPPED = 130;
+
+    private int run(Target target, JobContext job) {
         List<String> failed = new ArrayList<>();
         if (target == Target.SYMBOL || target == Target.ALL) {
-            out.accept("Symbol: rebuilding the gtags files…");
-            out.accept("Symbol: " + indexService.rebuildSymbolIndex());
+            if (job.stopRequested()) return stopped(job);
+            job.line("Symbol: rebuilding the gtags files…");
+            job.line("Symbol: " + indexService.rebuildSymbolIndex());
         }
         if (target == Target.JAVADOC || target == Target.ALL) {
-            failed.addAll(generateAllDocs(out));
-            out.accept("Javadoc: rebuilding the Javadoc index…");
-            out.accept("Javadoc: " + indexService.rebuildJavadocIndex());
+            failed.addAll(generateAllDocs(job));
+            if (job.stopRequested()) return stopped(job);
+            job.line("Javadoc: rebuilding the Javadoc index…");
+            job.line("Javadoc: " + indexService.rebuildJavadocIndex());
         }
         if (target == Target.PROJECTS || target == Target.ALL) {
-            out.accept("Projects: rebuilding the project list index…");
-            out.accept("Projects: " + indexService.rebuildProjectIndex());
+            if (job.stopRequested()) return stopped(job);
+            job.line("Projects: rebuilding the project list index…");
+            job.line("Projects: " + indexService.rebuildProjectIndex());
         }
         if (failed.isEmpty()) {
-            out.accept("Done.");
+            job.line("Done.");
             return 0;
         }
-        out.accept("Done. Docs failed in " + failed.size() + " project(s): " + String.join(", ", failed));
+        job.line("Done. Docs failed in " + failed.size() + " project(s): " + String.join(", ", failed));
         return 1;
     }
 
-    /** Runs the Docs command of every project that has one, one after another; returns the failed ones. */
-    private List<String> generateAllDocs(Consumer<String> out) {
+    /** Ends a stopped rebuild; the steps after the one that was running are not done. */
+    private static int stopped(JobContext job) {
+        job.line("Stopped. The remaining steps were not run.");
+        return STOPPED;
+    }
+
+    /**
+     * Runs the Docs command of every project that has one, one after another, until the job is
+     * asked to stop; returns the projects whose command failed.
+     */
+    private List<String> generateAllDocs(JobContext job) {
         List<ProjectInfo> withDocs = indexService.codeProjects().stream()
                 .map(infoReader::read)
                 .filter(p -> buildService.hasDocs(p.buildSystem()))
                 .toList();
-        out.accept("Javadoc: running Docs in " + withDocs.size() + " project(s)…");
+        job.line("Javadoc: running Docs in " + withDocs.size() + " project(s)…");
         List<String> failed = new ArrayList<>();
         Path works = indexService.worksDir();
-        for (int i = 0; i < withDocs.size(); i++) {
+        for (int i = 0; i < withDocs.size() && !job.stopRequested(); i++) {
             ProjectInfo p = withDocs.get(i);
             String step = "(" + (i + 1) + "/" + withDocs.size() + ") " + p.name() + " docs";
+            job.line(step + "…");
             Deque<String> tail = new ArrayDeque<>();
             long started = System.nanoTime();
-            int code = buildService.runDocs(works.resolve(p.name()), p.buildSystem(), line -> {
+            int code = buildService.runDocs(works.resolve(p.name()), p.buildSystem(), job, line -> {
                 if (tail.size() == FAILURE_TAIL) tail.removeFirst();
                 tail.addLast(line.length() > MAX_LINE ? line.substring(0, MAX_LINE) + "…" : line);
             });
             long seconds = (System.nanoTime() - started) / 1_000_000_000L;
-            if (code == 0) {
-                out.accept(step + " ✓ " + seconds + "s");
+            if (job.stopRequested()) {
+                job.line(step + " stopped after " + seconds + "s");
+            } else if (code == 0) {
+                job.line(step + " ✓ " + seconds + "s");
             } else {
-                out.accept(step + " ✗ exit " + code + " " + seconds + "s");
-                tail.forEach(line -> out.accept("    " + line));
+                job.line(step + " ✗ exit " + code + " " + seconds + "s");
+                tail.forEach(line -> job.line("    " + line));
                 failed.add(p.name());
             }
         }
