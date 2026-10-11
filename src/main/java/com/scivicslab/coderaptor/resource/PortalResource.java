@@ -93,7 +93,16 @@ public class PortalResource {
 
               /* ── Two panes: search forms and projects on the left, what was asked for on the right ── */
               #layout { flex: 1; display: flex; min-height: 0; }
-              #left  { width: 460px; flex-shrink: 0; overflow-y: auto; padding: 1rem; }
+              #left  { width: 460px; flex-shrink: 0; display: flex; flex-direction: column; min-height: 0; }
+              .left-tabs { display: flex; gap: 0.2rem; padding: 0.5rem 1rem 0; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+              .left-tab { background: none; border: 1px solid transparent; border-bottom: none; color: var(--text-secondary);
+                          padding: 0.35rem 0.9rem; font-size: 0.8rem; font-weight: 600; cursor: pointer; border-radius: 4px 4px 0 0;
+                          text-transform: uppercase; letter-spacing: 0.05em; }
+              .left-tab:hover { color: var(--text-primary); }
+              .left-tab.active { color: var(--accent); border-color: var(--border); background: var(--bg-primary); margin-bottom: -1px; }
+              .left-panel { display: none; flex: 1; min-height: 0; overflow-y: auto; padding: 1rem; }
+              .left-panel.active { display: block; }
+              #panel-chat.active { display: flex; flex-direction: column; overflow: hidden; }
               #right { flex: 1; min-width: 0; overflow-y: auto; }
               /* Draggable divider between the two panes. */
               #pane-splitter { flex: 0 0 6px; cursor: col-resize; background: var(--border);
@@ -315,6 +324,32 @@ public class PortalResource {
                 .doc-title { flex: 1; font-family: monospace; font-size: 0.85rem; font-weight: 700;
                              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
                 #doc-frame { flex: 1; width: 100%; border: 0; background: #fff; }
+
+                /* ── AI Chat ── */
+                .chat-head { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.6rem; flex-shrink: 0; }
+                .chat-head select { flex: 1; min-width: 0; }
+                #chat-messages { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 0.6rem; padding-bottom: 0.5rem; }
+                .chat-guide { color: var(--text-secondary); font-size: 0.82rem; line-height: 1.6; }
+                .chat-msg { padding: 0.5rem 0.7rem; border-radius: 6px; font-size: 0.85rem; line-height: 1.55;
+                            white-space: pre-wrap; word-break: break-word; }
+                .chat-user { background: var(--bg-tertiary); align-self: flex-end; max-width: 90%; }
+                .chat-assistant { background: var(--bg-secondary); border: 1px solid var(--border); }
+                .chat-assistant.streaming { border-color: var(--accent2); }
+                .chat-error { color: var(--red); border: 1px solid var(--red); }
+                .chat-msg code { font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.8rem;
+                                 background: var(--bg-primary); padding: 0.05rem 0.3rem; border-radius: 3px; }
+                .chat-code { font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.78rem; background: var(--bg-primary);
+                             padding: 0.5rem 0.6rem; border-radius: 4px; overflow-x: auto; white-space: pre; margin: 0.3rem 0; }
+                .chat-search { font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.75rem; color: var(--accent2);
+                               cursor: pointer; padding: 0.15rem 0.4rem; border-left: 2px solid var(--accent2); }
+                .chat-search:hover { background: var(--bg-secondary); }
+                .chat-input { flex-shrink: 0; display: flex; flex-direction: column; gap: 0.4rem; padding-top: 0.5rem;
+                              border-top: 1px solid var(--border); }
+                .chat-input textarea { width: 100%; resize: vertical; padding: 0.4rem 0.6rem; border-radius: 4px;
+                                       border: 1px solid var(--border); background: var(--bg-primary); color: var(--text-primary);
+                                       font-family: inherit; font-size: 0.85rem; outline: none; }
+                .chat-input textarea:focus { border-color: var(--accent2); }
+                .chat-buttons { display: flex; gap: 0.4rem; justify-content: flex-end; }
                 .log-header {
                   display: flex; align-items: center; gap: 1rem;
                   padding: 0.35rem 1rem;
@@ -363,6 +398,12 @@ public class PortalResource {
 
             <div id="layout">
               <div id="left">
+                <div class="left-tabs">
+                  <button class="left-tab active" data-panel="search" onclick="showLeftPanel('search')">Search</button>
+                  <button class="left-tab" data-panel="chat" onclick="showLeftPanel('chat')">AI Chat</button>
+                </div>
+
+                <div class="left-panel active" id="panel-search">
                 <div class="left-section">
                   <div class="section-label">Search</div>
                   <div class="search-group">
@@ -405,6 +446,27 @@ public class PortalResource {
                     <div class="pager-pages" id="pager-pages"></div>
                     <button class="btn" id="pager-prev" onclick="changePage(currentPage-1)">&#8249;</button>
                     <button class="btn" id="pager-next" onclick="changePage(currentPage+1)">&#8250;</button>
+                  </div>
+                </div>
+                </div>
+
+                <div class="left-panel" id="panel-chat">
+                  <div class="chat-head">
+                    <select id="chat-model" class="page-size" title="LLM on the GPU broker"></select>
+                    <button class="log-rerun" onclick="clearChat()" title="Forget this conversation">Clear</button>
+                  </div>
+                  <div id="chat-messages">
+                    <div class="chat-guide">Ask about the code in the works directory. The LLM runs
+                      code-raptor's Symbol and Javadoc searches itself and answers from the results.
+                      The conversation is kept only on this page; reloading clears it.</div>
+                  </div>
+                  <div class="chat-input">
+                    <textarea id="chat-input" rows="3" placeholder="e.g. Where is requestFromWorker defined?"
+                              onkeydown="chatKey(event)"></textarea>
+                    <div class="chat-buttons">
+                      <button class="btn btn-primary" id="chat-send" onclick="sendChat()">Send</button>
+                      <button class="btn" id="chat-stop" onclick="stopChat()" style="display:none">&#9632; Stop</button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -941,6 +1003,155 @@ public class PortalResource {
                 else doBuild(lastBuildBtn);
               }
 
+              // ── Left pane tabs ─────────────────────────────────────────────
+              function showLeftPanel(name) {
+                document.querySelectorAll('.left-tab').forEach(t => t.classList.toggle('active', t.dataset.panel === name));
+                document.querySelectorAll('.left-panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
+                localStorage.setItem('code-raptor-left-tab', name);
+                if (name === 'chat') loadChatModels();
+              }
+
+              // ── AI Chat ────────────────────────────────────────────────────
+              // The conversation lives only here: each question sends the earlier questions and answers.
+              const chatHistory = [];
+              let chatAbort = null, chatModelsLoaded = false;
+              const SEARCH_TAG = /<(symbol_search|javadoc_search)\\b[^>]*>[\\s\\S]*?<\\/\\1\\s*>/g;
+
+              async function loadChatModels() {
+                if (chatModelsLoaded) return;
+                const sel = document.getElementById('chat-model');
+                try {
+                  const res = await fetch('/api/chat/models');
+                  const body = await res.json();
+                  if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+                  sel.innerHTML = body.models.map(m => '<option value="' + esc(m) + '">' + esc(m) + '</option>').join('');
+                  chatModelsLoaded = true;
+                } catch (e) {
+                  sel.innerHTML = '<option value="">' + esc('No models: ' + e.message) + '</option>';
+                }
+              }
+
+              // The small part of Markdown LLM answers use: fenced code, inline code, bold, headings, list items.
+              function chatMarkdown(text) {
+                const parts = text.split(/```[^\\n]*\\n?/);
+                return parts.map((part, i) => {
+                  if (i % 2 === 1) return '<pre class="chat-code">' + esc(part.replace(/\\n$/, '')) + '</pre>';
+                  return esc(part)
+                    .replace(/`([^`\\n]+)`/g, '<code>$1</code>')
+                    .replace(/\\*\\*([^*\\n]+)\\*\\*/g, '<strong>$1</strong>')
+                    .replace(/^#{1,6} +(.+)$/gm, '<strong>$1</strong>')
+                    .replace(/^\\s*[-*] +/gm, '• ');
+                }).join('');
+              }
+
+              function chatKey(e) {
+                if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendChat(); }
+              }
+
+              function chatAppend(cls, text) {
+                const box = document.getElementById('chat-messages');
+                const div = document.createElement('div');
+                div.className = 'chat-msg ' + cls;
+                div.textContent = text;
+                box.appendChild(div);
+                box.scrollTop = box.scrollHeight;
+                return div;
+              }
+
+              function chatSearchLine(ev) {
+                const box = document.getElementById('chat-messages');
+                const div = document.createElement('div');
+                div.className = 'chat-search';
+                const what = ev.tool === 'symbol_search' ? ev.searchType + ' "' + ev.query + '"' : 'javadoc "' + ev.query + '"';
+                div.textContent = '→ ' + what + ' — ' + ev.hits + ' hit(s)';
+                div.title = (ev.lines || []).join('\\n') || 'no hits';
+                div.onclick = () => {
+                  if (ev.tool === 'symbol_search') symbolSearch(ev.query, ev.searchType, 0);
+                  else { document.getElementById('javadoc-input').value = ev.query; javadocSearch(); }
+                };
+                box.appendChild(div);
+                box.scrollTop = box.scrollHeight;
+              }
+
+              async function sendChat() {
+                const input = document.getElementById('chat-input');
+                const question = input.value.trim();
+                const model = document.getElementById('chat-model').value;
+                if (!question || chatAbort) return;
+                if (!model) { chatAppend('chat-error', 'No model is available from the GPU broker.'); return; }
+                input.value = '';
+                const guide = document.querySelector('#chat-messages .chat-guide');
+                if (guide) guide.remove();
+                chatAppend('chat-user', question);
+                let raw = '';
+                let live = chatAppend('chat-assistant streaming', '…');
+                document.getElementById('chat-send').style.display = 'none';
+                document.getElementById('chat-stop').style.display = '';
+                chatAbort = new AbortController();
+                let answer = null;
+                try {
+                  const res = await fetch('/api/chat', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'}, signal: chatAbort.signal,
+                    body: JSON.stringify({model, history: chatHistory, question})
+                  });
+                  if (!res.ok) throw new Error('HTTP ' + res.status);
+                  const reader = res.body.getReader();
+                  const decoder = new TextDecoder();
+                  let buf = '';
+                  for (;;) {
+                    const {value, done} = await reader.read();
+                    if (done) break;
+                    buf += decoder.decode(value, {stream: true});
+                    let cut;
+                    while ((cut = buf.indexOf('\\n\\n')) >= 0) {
+                      const chunk = buf.slice(0, cut); buf = buf.slice(cut + 2);
+                      const data = chunk.split('\\n').filter(l => l.startsWith('data:')).map(l => l.slice(5).trimStart()).join('\\n');
+                      if (!data) continue;
+                      const ev = JSON.parse(data);
+                      if (ev.type === 'text') {
+                        raw += ev.text;
+                        live.textContent = raw.replace(SEARCH_TAG, '').trim() || '…';
+                      } else if (ev.type === 'search') {
+                        chatSearchLine(ev);
+                      } else if (ev.type === 'step') {
+                        // A reply that was not the answer: a request for searches, or an answer
+                        // made without searching that the server sent back. Only the search lines stay.
+                        live.remove();
+                        raw = '';
+                        live = chatAppend('chat-assistant streaming', '…');
+                      } else if (ev.type === 'answer') {
+                        answer = ev.text;
+                        if (answer) live.innerHTML = chatMarkdown(answer.trim());
+                        else live.textContent = '(no answer)';
+                      } else if (ev.type === 'error') {
+                        live.remove();
+                        chatAppend('chat-error', 'Error: ' + ev.message);
+                      }
+                      document.getElementById('chat-messages').scrollTop = 1e9;
+                    }
+                  }
+                } catch (e) {
+                  if (e.name === 'AbortError') live.textContent = (raw.replace(SEARCH_TAG, '').trim() || '') + '\\n(stopped)';
+                  else { live.remove(); chatAppend('chat-error', 'Error: ' + e.message); }
+                } finally {
+                  live.classList.remove('streaming');
+                  chatAbort = null;
+                  document.getElementById('chat-send').style.display = '';
+                  document.getElementById('chat-stop').style.display = 'none';
+                }
+                if (answer !== null) {
+                  chatHistory.push({role: 'user', content: question}, {role: 'assistant', content: answer});
+                }
+              }
+
+              function stopChat() { if (chatAbort) chatAbort.abort(); }
+
+              function clearChat() {
+                stopChat();
+                chatHistory.length = 0;
+                document.getElementById('chat-messages').innerHTML = '';
+              }
+
               // ── Pane divider ───────────────────────────────────────────────
               // Drag the divider to move the boundary between the two panes; the width is kept across visits.
               (function paneSplitter() {
@@ -982,6 +1193,7 @@ public class PortalResource {
               })();
 
               loadProjects(0, '');
+              if (localStorage.getItem('code-raptor-left-tab') === 'chat') showLeftPanel('chat');
             </script>
             </body>
             </html>
