@@ -48,7 +48,7 @@ public class CodeRaptorMcpTools {
             if (type == null || type.isBlank()) {
                 type = "references";
             }
-            List<SymbolHit> hits = symbolResource.search(symbol, type);
+            List<SymbolHit> hits = symbolResource.hits(symbol, type);
 
             if (hits.isEmpty()) {
                 return "No results found for symbol: " + symbol + " (type=" + type + ")";

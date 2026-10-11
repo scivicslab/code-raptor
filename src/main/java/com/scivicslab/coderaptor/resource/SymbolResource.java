@@ -9,6 +9,7 @@ import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
 import org.jboss.logging.Logger;
 
 import java.io.IOException;
@@ -41,20 +42,46 @@ public class SymbolResource {
     @Inject
     com.scivicslab.coderaptor.activity.ServedLog servedLog;
 
+    /**
+     * Symbols matching {@code q}, or 503 with the reason when GNU Global cannot be run. An empty
+     * list would read as "nothing matches" while nothing was searched.
+     */
     @GET
     @Produces(MediaType.APPLICATION_JSON)
-    public List<SymbolHit> search(
+    public Response search(
             @QueryParam("q") String query,
             @QueryParam("type") String type) {
 
         if (query == null || query.isBlank()) {
-            return Collections.emptyList();
+            return Response.ok(Collections.emptyList()).build();
         }
 
+        try {
+            return Response.ok(hits(query, type)).build();
+        } catch (SymbolSearchUnavailable e) {
+            return Response.status(Response.Status.SERVICE_UNAVAILABLE)
+                    .entity(java.util.Map.of("error", e.getMessage())).build();
+        }
+    }
+
+    /**
+     * The symbols matching {@code query}, for this endpoint and the MCP tool alike.
+     *
+     * @throws SymbolSearchUnavailable when GNU Global cannot be run, so a caller does not report
+     *         "no results" for a search that never happened
+     */
+    public List<SymbolHit> hits(String query, String type) {
+        if (query == null || query.isBlank()) return Collections.emptyList();
         servedLog.note("symbol?q=" + query + "&type=" + type,
                        "Searching the source for \"" + query + "\"");
-        String[] args = buildGlobalArgs(query, type);
-        return runGlobal(args);
+        return runGlobal(buildGlobalArgs(query, type));
+    }
+
+    /** The search command could not be started at all, so nothing was searched. */
+    public static final class SymbolSearchUnavailable extends RuntimeException {
+        SymbolSearchUnavailable(String message, Throwable cause) {
+            super(message, cause);
+        }
     }
 
     /**
@@ -99,11 +126,13 @@ public class SymbolResource {
             }
             return hits;
 
-        } catch (IOException | InterruptedException e) {
+        } catch (IOException e) {
             LOG.errorf(e, "Failed to run global");
-            if (e instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
-            }
+            throw new SymbolSearchUnavailable("Symbol search needs GNU Global, and its '" + args[0]
+                    + "' command could not be started (is GNU Global installed?): " + e.getMessage(), e);
+        } catch (InterruptedException e) {
+            LOG.errorf(e, "Failed to run global");
+            Thread.currentThread().interrupt();
             return Collections.emptyList();
         }
     }

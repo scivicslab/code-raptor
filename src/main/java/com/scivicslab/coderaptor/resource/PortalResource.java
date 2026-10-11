@@ -724,7 +724,12 @@ public class PortalResource {
 
                 try {
                   const res = await fetch('/api/symbol?q=' + enc(searchQuery) + '&type=' + enc(searchType));
-                  if (!res.ok) throw new Error('HTTP ' + res.status);
+                  if (!res.ok) {
+                    // 503 carries why nothing was searched (GNU Global missing); show that, not a bare status.
+                    let message = 'HTTP ' + res.status;
+                    try { const body = await res.json(); if (body && body.error) message = body.error; } catch (_) {}
+                    throw new Error(message);
+                  }
                   allHits = await res.json();
                   renderPage(currentPage);
                 } catch(e) {
