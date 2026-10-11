@@ -93,9 +93,15 @@ public class PortalResource {
 
               /* ── Two panes: search forms and projects on the left, what was asked for on the right ── */
               #layout { flex: 1; display: flex; min-height: 0; }
-              #left  { width: 460px; flex-shrink: 0; overflow-y: auto; padding: 1rem;
-                       border-right: 1px solid var(--border); }
+              #left  { width: 460px; flex-shrink: 0; overflow-y: auto; padding: 1rem; }
               #right { flex: 1; min-width: 0; overflow-y: auto; }
+              /* Draggable divider between the two panes. */
+              #pane-splitter { flex: 0 0 6px; cursor: col-resize; background: var(--border);
+                               border-left: 1px solid var(--border); border-right: 1px solid var(--border); }
+              #pane-splitter:hover { background: var(--accent); }
+              /* While dragging, freeze the iframe so it does not swallow the mouse. */
+              body.pane-dragging { cursor: col-resize; user-select: none; }
+              body.pane-dragging #doc-frame { pointer-events: none; }
               .view { display: none; padding: 1rem 1.5rem; }
               .view.active { display: block; }
               #view-doc.active, #view-build.active { display: flex; flex-direction: column; height: 100%; padding: 0; }
@@ -395,6 +401,8 @@ public class PortalResource {
                   </div>
                 </div>
               </div>
+
+              <div id="pane-splitter" title="Drag to resize"></div>
 
               <div id="right">
                 <div class="view active" id="view-empty">
@@ -883,6 +891,33 @@ public class PortalResource {
                 document.getElementById('log-rerun-btn').style.display = 'none';
                 doBuild(lastBuildBtn);
               }
+
+              // ── Pane divider ───────────────────────────────────────────────
+              // Drag the divider to move the boundary between the two panes; the width is kept across visits.
+              (function paneSplitter() {
+                const left = document.getElementById('left');
+                const splitter = document.getElementById('pane-splitter');
+                const savedWidth = localStorage.getItem('code-raptor-left-width');
+                if (savedWidth) left.style.width = savedWidth + 'px';
+                splitter.addEventListener('mousedown', e => {
+                  e.preventDefault();
+                  document.body.classList.add('pane-dragging');
+                  const startX = e.clientX;
+                  const startW = left.getBoundingClientRect().width;
+                  function onMove(ev) {
+                    const w = Math.max(280, Math.min(startW + (ev.clientX - startX), window.innerWidth - 300));
+                    left.style.width = w + 'px';
+                  }
+                  function onUp() {
+                    document.body.classList.remove('pane-dragging');
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onUp);
+                    localStorage.setItem('code-raptor-left-width', Math.round(left.getBoundingClientRect().width));
+                  }
+                  document.addEventListener('mousemove', onMove);
+                  document.addEventListener('mouseup', onUp);
+                });
+              })();
 
               // ── Restore the view named in the address ──────────────────────
               (function restoreFromUrl() {
