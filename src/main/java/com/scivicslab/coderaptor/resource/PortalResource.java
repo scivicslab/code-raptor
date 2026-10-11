@@ -6,19 +6,23 @@ import jakarta.inject.Inject;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.UriInfo;
+import java.net.URI;
 
 /**
  * Serves the code-raptor portal UI.
  *
- * <p>GET /        — project list + javadoc search
- * <p>GET /search  — symbol search results (OpenGrok-style)
+ * <p>GET /        — two panes: search forms and the project list on the left; symbol results,
+ *                   Javadoc results, documentation pages and build logs on the right
+ * <p>GET /search  — redirects to / with the same query (symbol results used to live here)
  */
 @Path("/")
 @ApplicationScoped
 public class PortalResource {
 
-    // ── Shared CSS (Catppuccin dark theme) ────────────────────────────────────
     private static final String COMMON_CSS = """
               :root {
                 --bg-primary:    #1e1e2e;
@@ -34,14 +38,16 @@ public class PortalResource {
                 --yellow:        #f9e2af;
               }
               * { box-sizing: border-box; margin: 0; padding: 0; }
+              html, body { height: 100%; }
               body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-                     background: var(--bg-primary); color: var(--text-primary); min-height: 100vh; }
+                     background: var(--bg-primary); color: var(--text-primary);
+                     display: flex; flex-direction: column; overflow: hidden; }
 
               /* ── Header ── */
               header {
                 background: var(--bg-secondary);
                 border-bottom: 1px solid var(--border);
-                padding: 0.65rem 2rem;
+                padding: 0.55rem 1.2rem; flex-shrink: 0;
                 display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;
               }
               .header-brand { display: flex; align-items: baseline; gap: 0.75rem; }
@@ -61,7 +67,7 @@ public class PortalResource {
                 padding: 0.32rem 0.7rem; border-radius: 4px;
                 border: 1px solid var(--border);
                 background: var(--bg-primary); color: var(--text-primary);
-                font-size: 0.875rem; width: 200px; outline: none;
+                font-size: 0.875rem; flex: 1; min-width: 0; outline: none;
               }
               .search-group input[type=text]:focus { border-color: var(--accent2); }
               .search-group input[type=text]::placeholder { color: var(--text-secondary); }
@@ -85,8 +91,14 @@ public class PortalResource {
 
               .separator { width: 1px; height: 24px; background: var(--border); margin: 0 0.2rem; align-self: center; flex-shrink: 0; }
 
-              /* ── Main layout ── */
-              main { max-width: 1100px; margin: 1.5rem auto; padding: 0 1.5rem; }
+              /* ── Two panes: search forms and projects on the left, what was asked for on the right ── */
+              #layout { flex: 1; display: flex; min-height: 0; }
+              #left  { width: 460px; flex-shrink: 0; overflow-y: auto; padding: 1rem;
+                       border-right: 1px solid var(--border); }
+              #right { flex: 1; min-width: 0; overflow-y: auto; }
+              .view { display: none; padding: 1rem 1.5rem; }
+              .view.active { display: block; }
+              #view-doc.active, #view-build.active { display: flex; flex-direction: column; height: 100%; padding: 0; }
 
               .section-label {
                 font-size: 0.75rem; font-weight: 600; color: var(--text-secondary);
@@ -125,7 +137,7 @@ public class PortalResource {
               @keyframes blink { 50% { opacity: 0.45; } }
             """;
 
-    // ── Main portal page (/) ───────────────────────────────────────────────────
+    // ── Portal page (/) ──────────────────────────────────────────────────────
     private static final String PORTAL_HTML = """
             <!DOCTYPE html>
             <html lang="en">
@@ -138,9 +150,9 @@ public class PortalResource {
             """ + COMMON_CSS + """
                 /* ── Project list ── */
                 .project-list { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px 8px 0 0; overflow: hidden; }
-                .project-row { display: flex; align-items: center; gap: 14px; padding: 9px 16px; border-bottom: 1px solid var(--border); }
+                .project-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
                 .project-row:last-child { border-bottom: none; }
-                .project-name { font-size: 0.92rem; font-weight: 700; min-width: 200px; }
+                .project-name { font-size: 0.92rem; font-weight: 700; flex-basis: 100%; }
                 .project-name a { color: var(--text-primary); text-decoration: none; }
                 .project-name a:hover { color: var(--accent2); text-decoration: underline; }
                 .project-labels { flex: 1; display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
@@ -171,7 +183,7 @@ public class PortalResource {
                 .pager-page:hover:not(.active) { border-color: var(--accent); color: var(--accent); }
                 .pager-ellipsis { padding: 0.2rem 0.3rem; font-size: 0.78rem; color: var(--text-secondary); }
 
-                .filter-input { padding: 0.18rem 0.55rem; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-primary); color: var(--text-primary); font-size: 0.78rem; width: 150px; outline: none; font-weight: 400; text-transform: none; letter-spacing: 0; }
+                .filter-input { padding: 0.18rem 0.55rem; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-primary); color: var(--text-primary); font-size: 0.78rem; width: 120px; outline: none; font-weight: 400; text-transform: none; letter-spacing: 0; }
                 .filter-input:focus { border-color: var(--accent2); }
                 .filter-input::placeholder { color: var(--text-secondary); }
                 select.page-size { padding: 0.18rem 0.4rem; border-radius: 3px; border: 1px solid var(--border); background: var(--bg-tertiary); color: var(--text-primary); font-size: 0.78rem; cursor: pointer; outline: none; }
@@ -179,15 +191,124 @@ public class PortalResource {
                 /* ── Build actions column ── */
                 .project-actions { display: flex; gap: 0.3rem; align-items: center; flex-shrink: 0; }
 
-                /* ── Build log panel (fixed bottom) ── */
-                #build-log-panel {
-                  position: fixed; bottom: 0; left: 0; right: 0;
-                  height: 40vh; min-height: 180px;
-                  display: none; flex-direction: column;
-                  background: #08080f;
-                  border-top: 2px solid var(--accent2);
-                  z-index: 1000; box-shadow: 0 -4px 20px rgba(0,0,0,.6);
+                /* ── Result summary bar ── */
+                .result-summary {
+                  display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap;
+                  padding: 0.6rem 0; margin-bottom: 1.5rem;
+                  border-bottom: 1px solid var(--border);
                 }
+                .result-count { font-weight: 700; font-size: 1.05rem; }
+                .result-query { color: var(--accent); font-family: 'SFMono-Regular', Consolas, monospace; font-size: 1rem; }
+                .result-type-badge {
+                  font-size: 0.72rem; padding: 0.12rem 0.5rem; border-radius: 3px;
+                  background: var(--bg-tertiary); color: var(--accent2);
+                  border: 1px solid var(--border); font-family: monospace;
+                }
+                .result-range { color: var(--text-secondary); font-size: 0.82rem; margin-left: auto; }
+
+                /* ── File group (OpenGrok style) ── */
+                .file-group { margin-bottom: 1.5rem; border-radius: 4px; overflow: hidden; }
+
+                .file-header {
+                  display: flex; align-items: center; gap: 1rem;
+                  padding: 0.45rem 1rem;
+                  background: var(--bg-secondary);
+                  border-left: 3px solid var(--accent2);
+                  border-bottom: 1px solid var(--border);
+                  border-radius: 4px 4px 0 0;
+                }
+                .file-path {
+                  font-family: 'SFMono-Regular', Consolas, monospace;
+                  color: var(--accent2); font-size: 0.875rem; font-weight: 600;
+                  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                  text-decoration: none;
+                }
+                a.file-path:hover { text-decoration: underline; }
+                .file-project {
+                  color: var(--accent3); font-weight: 700;
+                }
+                .file-path-rest { color: var(--text-secondary); font-weight: 400; }
+                .match-count {
+                  color: var(--text-secondary); font-size: 0.72rem;
+                  background: var(--bg-tertiary); border: 1px solid var(--border);
+                  border-radius: 3px; padding: 0.05rem 0.4rem;
+                  white-space: nowrap; font-family: monospace;
+                }
+
+                /* ── Code lines table ── */
+                .result-lines {
+                  border: 1px solid var(--border); border-top: none;
+                  border-radius: 0 0 4px 4px;
+                  background: var(--bg-primary);
+                  overflow: hidden;
+                }
+                .result-line {
+                  display: flex; align-items: stretch;
+                  border-bottom: 1px solid rgba(88,91,112,0.25);
+                }
+                .result-line:last-child { border-bottom: none; }
+                .result-line:hover { background: var(--bg-secondary); }
+
+                .line-num {
+                  min-width: 4.5rem; text-align: right;
+                  padding: 0.25rem 0.75rem;
+                  color: var(--text-secondary);
+                  font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.8rem;
+                  text-decoration: none; user-select: none;
+                  border-right: 1px solid rgba(88,91,112,0.4);
+                  background: rgba(49,50,68,0.5); flex-shrink: 0;
+                  display: flex; align-items: center; justify-content: flex-end;
+                }
+                .line-num:hover { color: var(--accent2); text-decoration: underline; }
+
+                .line-code {
+                  padding: 0.25rem 1rem;
+                  font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.82rem;
+                  white-space: pre; overflow: hidden; text-overflow: ellipsis;
+                  color: var(--text-primary); flex: 1; align-self: center;
+                }
+
+                mark.hl {
+                  background: rgba(249,226,175,0.22); color: var(--yellow);
+                  border-radius: 2px; padding: 0.05em 0.1em;
+                  font-style: normal;
+                }
+
+                /* ── Pagination ── */
+                .pagination {
+                  display: flex; align-items: center; gap: 0.4rem;
+                  justify-content: center; margin: 2.5rem 0 1.5rem; flex-wrap: wrap;
+                }
+                .page-btn {
+                  padding: 0.3rem 0.75rem; border-radius: 4px;
+                  border: 1px solid var(--border);
+                  background: var(--bg-secondary); color: var(--text-primary);
+                  font-size: 0.82rem; cursor: pointer; text-decoration: none;
+                  display: inline-block;
+                }
+                .page-btn:hover:not([disabled]):not(.active) { border-color: var(--accent2); color: var(--accent2); }
+                .page-btn.active { background: var(--accent2); color: var(--bg-primary); border-color: var(--accent2); font-weight: 700; cursor: default; }
+                .page-btn[disabled] { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
+                .page-ellipsis { padding: 0.3rem 0.3rem; color: var(--text-secondary); font-size: 0.85rem; align-self: center; }
+
+                .no-results { color: var(--text-secondary); padding: 2rem 0; text-align: center; font-size: 0.9rem; }
+                .loading { color: var(--text-secondary); padding: 2rem 0; text-align: center; }
+
+                /* ── Left pane ── */
+                .left-section { margin-bottom: 1.2rem; }
+                .left-section .search-group { margin-bottom: 0.4rem; }
+                .left-section .search-group label { width: 4.2rem; }
+
+                /* ── Right pane ── */
+                .empty-guide { color: var(--text-secondary); font-size: 0.9rem; padding: 3rem 1rem; text-align: center; line-height: 1.8; }
+                .doc-toolbar {
+                  display: flex; align-items: center; gap: 0.8rem;
+                  padding: 0.35rem 1rem; flex-shrink: 0;
+                  background: var(--bg-secondary); border-bottom: 1px solid var(--border);
+                }
+                .doc-title { flex: 1; font-family: monospace; font-size: 0.85rem; font-weight: 700;
+                             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+                #doc-frame { flex: 1; width: 100%; border: 0; background: #fff; }
                 .log-header {
                   display: flex; align-items: center; gap: 1rem;
                   padding: 0.35rem 1rem;
@@ -219,101 +340,340 @@ public class PortalResource {
 
             <header>
               <div class="header-brand">
-                <h1>🦅 code-raptor</h1>
+                <h1><a href="/">🦅 code-raptor</a></h1>
                 <p id="project-count-header">Cross-project symbol &amp; Javadoc search</p>
               </div>
-
               <div class="search-forms">
-                <!-- Symbol search → navigates to /search -->
-                <div class="search-group">
-                  <label>Symbol</label>
-                  <input type="text" id="symbol-input" placeholder="e.g. addIIActor"
-                         onkeydown="if(event.key==='Enter') goSearch()">
-                  <select id="symbol-type">
-                    <option value="references">references</option>
-                    <option value="definition">definition</option>
-                    <option value="grep">grep</option>
-                    <option value="files">files</option>
-                  </select>
-                  <button class="btn btn-primary" onclick="goSearch()">Search</button>
-                </div>
-
-                <div class="separator"></div>
-
-                <!-- Javadoc search (inline) -->
-                <div class="search-group">
-                  <label>Javadoc</label>
-                  <input type="text" id="javadoc-input" placeholder="e.g. ActorRef tell"
-                         onkeydown="if(event.key==='Enter') javadocSearch()">
-                  <button class="btn btn-primary" onclick="javadocSearch()">Search</button>
-                </div>
-
-                <div class="separator"></div>
-
                 <button class="btn" id="reindex-btn" onclick="doReindex(this)" title="Rebuild indexes">Reindex</button>
               </div>
             </header>
 
-            <main>
-              <div id="javadoc-section" style="display:none">
-                <div class="section-label">
-                  Javadoc results
-                  <span id="javadoc-count" class="count-badge"></span>
-                </div>
-                <div id="javadoc-results"></div>
-              </div>
-
-              <!-- Project list -->
-              <div id="projects-section">
-                <div class="section-label">
-                  Projects
-                  <span id="projects-count" class="count-badge"></span>
-                  <span style="margin-left:auto;display:flex;align-items:center;gap:0.5rem;">
-                    <input type="text" id="project-filter" class="filter-input"
-                           placeholder="filter…" oninput="filterProjects(this.value)">
-                    <span style="font-size:0.75rem;text-transform:none;letter-spacing:0;color:var(--text-secondary);">per page:</span>
-                    <select class="page-size" id="page-size-select" onchange="setPageSize(+this.value)">
-                      <option value="20" selected>20</option>
-                      <option value="50">50</option>
-                      <option value="100">100</option>
+            <div id="layout">
+              <div id="left">
+                <div class="left-section">
+                  <div class="section-label">Search</div>
+                  <div class="search-group">
+                    <label>Symbol</label>
+                    <input type="text" id="symbol-input" placeholder="e.g. addIIActor"
+                           onkeydown="if(event.key==='Enter') goSearch()">
+                    <select id="symbol-type">
+                      <option value="references">references</option>
+                      <option value="definition">definition</option>
+                      <option value="grep">grep</option>
+                      <option value="files">files</option>
                     </select>
-                  </span>
+                    <button class="btn btn-primary" onclick="goSearch()">Search</button>
+                  </div>
+                  <div class="search-group">
+                    <label>Javadoc</label>
+                    <input type="text" id="javadoc-input" placeholder="e.g. ActorRef tell"
+                           onkeydown="if(event.key==='Enter') javadocSearch()">
+                    <button class="btn btn-primary" onclick="javadocSearch()">Search</button>
+                  </div>
                 </div>
-                <div id="projects-list"><div class="status-row">Loading…</div></div>
-                <div id="projects-pager" class="pager" style="display:none">
-                  <span class="pager-info" id="pager-info"></span>
-                  <div class="pager-pages" id="pager-pages"></div>
-                  <button class="btn" id="pager-prev" onclick="changePage(currentPage-1)">&#8249; Prev</button>
-                  <button class="btn" id="pager-next" onclick="changePage(currentPage+1)">Next &#8250;</button>
-                </div>
-              </div>
-            </main>
 
-            <!-- Build log panel -->
-            <div id="build-log-panel">
-              <div class="log-header">
-                <span class="log-title" id="log-title">Build output</span>
-                <span class="log-status" id="log-status"></span>
-                <button class="log-rerun" id="log-rerun-btn" onclick="rerunBuild()" style="display:none">&#9654; Re-run</button>
-                <button class="log-close" onclick="closeLog()">&#10005; close</button>
+                <div id="projects-section" class="left-section">
+                  <div class="section-label">
+                    Projects
+                    <span id="projects-count" class="count-badge"></span>
+                    <span style="margin-left:auto;display:flex;align-items:center;gap:0.5rem;">
+                      <input type="text" id="project-filter" class="filter-input"
+                             placeholder="filter…" oninput="filterProjects(this.value)">
+                      <select class="page-size" id="page-size-select" onchange="setPageSize(+this.value)">
+                        <option value="20" selected>20</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                      </select>
+                    </span>
+                  </div>
+                  <div id="projects-list"><div class="status-row">Loading…</div></div>
+                  <div id="projects-pager" class="pager" style="display:none">
+                    <span class="pager-info" id="pager-info"></span>
+                    <div class="pager-pages" id="pager-pages"></div>
+                    <button class="btn" id="pager-prev" onclick="changePage(currentPage-1)">&#8249;</button>
+                    <button class="btn" id="pager-next" onclick="changePage(currentPage+1)">&#8250;</button>
+                  </div>
+                </div>
               </div>
-              <pre id="build-log-output"></pre>
+
+              <div id="right">
+                <div class="view active" id="view-empty">
+                  <div class="empty-guide">
+                    Search a symbol or Javadoc on the left.<br>
+                    Search results, Javadoc pages and build logs appear here.
+                  </div>
+                </div>
+
+                <div class="view" id="view-symbol">
+                  <div id="symbol-summary" class="result-summary"></div>
+                  <div id="symbol-results"></div>
+                  <div id="symbol-pagination"></div>
+                </div>
+
+                <div class="view" id="view-javadoc">
+                  <div class="section-label">
+                    Javadoc results
+                    <span id="javadoc-count" class="count-badge"></span>
+                  </div>
+                  <div id="javadoc-results"></div>
+                </div>
+
+                <div class="view" id="view-doc">
+                  <div class="doc-toolbar">
+                    <button class="log-rerun" onclick="goBack()">&#8592; back</button>
+                    <span class="doc-title" id="doc-title"></span>
+                    <button class="log-rerun" onclick="openDocInNewTab()">open in new tab &#8599;</button>
+                  </div>
+                  <iframe id="doc-frame" title="Documentation"></iframe>
+                </div>
+
+                <div class="view" id="view-build">
+                  <div class="log-header">
+                    <span class="log-title" id="log-title">Build output</span>
+                    <span class="log-status" id="log-status"></span>
+                    <button class="log-rerun" id="log-rerun-btn" onclick="rerunBuild()" style="display:none">&#9654; Re-run</button>
+                    <button class="log-close" onclick="closeLog()">&#10005; close</button>
+                  </div>
+                  <pre id="build-log-output"></pre>
+                </div>
+              </div>
             </div>
 
             <script>
-              function esc(s) { return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+              function esc(s) { return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
               function shortPath(p) { const m = p.match(/\\/works\\/(.+)/); return m ? m[1] : p; }
               function enc(s) { return encodeURIComponent(s); }
               function show(id) { document.getElementById(id).style.display = ''; }
               function hide(id) { document.getElementById(id).style.display = 'none'; }
               function setInner(id, html) { document.getElementById(id).innerHTML = html; }
 
-              // ── Symbol search → navigate to /search page ──────────────────
+              // ── Right pane views ───────────────────────────────────────────
+              // One view is shown at a time. Each view remembers the address that
+              // reproduces it, so a reload or a shared link reopens the same view.
+              let currentView = 'empty', previousView = 'empty';
+              const viewUrls = { empty: '/' };
+
+              function showView(name) {
+                if (name !== currentView) { previousView = currentView; currentView = name; }
+                document.querySelectorAll('#right .view').forEach(v =>
+                  v.classList.toggle('active', v.id === 'view-' + name));
+                history.replaceState(null, '', viewUrls[name] || '/');
+              }
+
+              function setViewUrl(name, url) {
+                viewUrls[name] = url;
+                if (currentView === name) history.replaceState(null, '', url);
+              }
+
+              function goBack() {
+                showView(previousView === currentView ? 'empty' : previousView);
+              }
+
+              // ── Documentation pages inside the right pane ───────────────────
+              function openDoc(url, title) {
+                if (!url.startsWith('/docs/')) return;
+                document.getElementById('doc-frame').src = url;
+                document.getElementById('doc-title').textContent = title || url;
+                viewUrls.doc = '/?doc=' + enc(url);
+                showView('doc');
+              }
+
+              function openDocInNewTab() {
+                const frame = document.getElementById('doc-frame');
+                let url = frame.src;
+                try { url = frame.contentWindow.location.href; } catch (_) {}
+                window.open(url, '_blank');
+              }
+
+              document.addEventListener('click', e => {
+                const a = e.target.closest('a.doc-link');
+                if (!a || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return;
+                e.preventDefault();
+                openDoc(a.getAttribute('href'), a.dataset.docTitle || a.textContent);
+              });
+
+              // ── Symbol search ──────────────────────────────────────────────
+              const PAGE_SIZE = 50;
+              let allHits = [], symbolPage = 0, searchQuery = '', searchType = '';
+
               function goSearch() {
                 const q    = document.getElementById('symbol-input').value.trim();
                 const type = document.getElementById('symbol-type').value;
                 if (!q) return;
-                window.location.href = '/search?q=' + enc(q) + '&type=' + enc(type);
+                symbolSearch(q, type, 0);
+              }
+
+              async function symbolSearch(q, type, page) {
+                searchQuery = q; searchType = type; allHits = [];
+                document.getElementById('symbol-input').value = q;
+                document.getElementById('symbol-type').value = type;
+                setViewUrl('symbol', '/?q=' + enc(q) + '&type=' + enc(type));
+                showView('symbol');
+                document.getElementById('symbol-summary').innerHTML = '<span class="loading">Searching…</span>';
+                setInner('symbol-results', '');
+                setInner('symbol-pagination', '');
+                try {
+                  const res = await fetch('/api/symbol?q=' + enc(q) + '&type=' + enc(type));
+                  if (!res.ok) {
+                    // 503 carries why nothing was searched (GNU Global missing); show that, not a bare status.
+                    let message = 'HTTP ' + res.status;
+                    try { const body = await res.json(); if (body && body.error) message = body.error; } catch (_) {}
+                    throw new Error(message);
+                  }
+                  allHits = await res.json();
+                  renderSymbolPage(page);
+                } catch(e) {
+                  document.getElementById('symbol-summary').innerHTML =
+                    '<span style="color:var(--red)">Error: ' + esc(e.message) + '</span>';
+                }
+              }
+
+              function renderSymbolPage(page) {
+                symbolPage = page;
+                const total      = allHits.length;
+                const totalPages = Math.ceil(total / PAGE_SIZE) || 1;
+                // Clamp page
+                if (page >= totalPages) page = symbolPage = totalPages - 1;
+
+                const from     = page * PAGE_SIZE;
+                const to       = Math.min(from + PAGE_SIZE, total);
+                const pageHits = allHits.slice(from, to);
+
+                // Update URL (no reload)
+                const url = '/?q=' + enc(searchQuery) + '&type=' + enc(searchType)
+                          + (page > 0 ? '&page=' + page : '');
+                setViewUrl('symbol', url);
+
+                // Summary
+                const typeLabel = searchType || 'references';
+                document.getElementById('symbol-summary').innerHTML =
+                  '<span class="result-count">' + total + '</span> result' + (total !== 1 ? 's' : '') +
+                  ' for <span class="result-query">' + esc(searchQuery) + '</span>' +
+                  ' &nbsp;<span class="result-type-badge">' + esc(typeLabel) + '</span>' +
+                  (totalPages > 1
+                    ? '<span class="result-range">page ' + (page+1) + ' / ' + totalPages +
+                      ' &nbsp;(' + (from+1) + '–' + to + ')</span>'
+                    : '');
+
+                // ── Group by file ──────────────────────────────────────────
+                const byFile = new Map();
+                for (const h of pageHits) {
+                  if (!byFile.has(h.file)) byFile.set(h.file, []);
+                  byFile.get(h.file).push(h);
+                }
+
+                const WORKS   = '%%WORKS_DIR%%';
+                const ideHost = location.hostname + ':8080';
+                const ideBase = 'http://' + ideHost;
+
+                function makeIdeUrl(h) {
+                  const abs    = h.file.startsWith(WORKS) ? h.file : WORKS + h.file;
+                  const fUri   = 'vscode-remote://' + ideHost + abs + ':' + h.line;
+                  const pl     = JSON.stringify([['openFile', fUri], ['gotoLineMode', 'true']]);
+                  return ideBase + '/?folder=' + enc(WORKS.slice(0,-1)) + '&payload=' + enc(pl);
+                }
+
+                function highlightTerm(escapedCode, term) {
+                  if (!term || term.length < 2) return escapedCode;
+                  // Escape regex special chars in the search term
+                  const re = new RegExp(term.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&'), 'gi');
+                  return escapedCode.replace(re, '<mark class="hl">$&</mark>');
+                }
+
+                // Split path into project / rest for visual emphasis
+                function splitPath(file) {
+                  const rel = file.startsWith('%%WORKS_DIR%%') ? file.slice('%%WORKS_DIR%%'.length) : file;
+                  const slash = rel.indexOf('/');
+                  if (slash < 0) return { project: rel, rest: '' };
+                  return { project: rel.slice(0, slash), rest: rel.slice(slash) };
+                }
+
+                let html = '';
+                if (pageHits.length === 0) {
+                  html = '<div class="no-results">No results found for <em>' + esc(searchQuery) + '</em>.</div>';
+                } else {
+                  for (const [file, lines] of byFile) {
+                    const { project, rest } = splitPath(file);
+                    html += '<div class="file-group">';
+                    // File header
+                    const firstUrl = makeIdeUrl(lines[0]);
+                    html += '<div class="file-header">';
+                    html += '<a class="file-path" href="' + firstUrl + '" target="code-server-ide">'
+                          + '<span class="file-project">' + esc(project) + '</span>'
+                          + '<span class="file-path-rest">' + esc(rest) + '</span>'
+                          + '</a>';
+                    html += '<span class="match-count">' + lines.length + ' match' + (lines.length > 1 ? 'es' : '') + '</span>';
+                    html += '</div>';
+                    // Code lines
+                    html += '<div class="result-lines">';
+                    for (const h of lines) {
+                      const ideUrl = makeIdeUrl(h);
+                      const code   = highlightTerm(esc(h.content.trim()), searchQuery);
+                      html += '<div class="result-line">';
+                      html += '<a class="line-num" href="' + ideUrl + '" target="code-server-ide">' + h.line + '</a>';
+                      html += '<span class="line-code">' + code + '</span>';
+                      html += '</div>';
+                    }
+                    html += '</div></div>';
+                  }
+                }
+                document.getElementById('symbol-results').innerHTML = html;
+
+                // ── Pagination ─────────────────────────────────────────────
+                if (totalPages <= 1) {
+                  document.getElementById('symbol-pagination').innerHTML = '';
+                } else {
+                  const slots = symbolPageSlots(page, totalPages);
+                  let pg = '<div class="pagination">';
+                  pg += '<button class="page-btn" onclick="renderSymbolPage(' + (page-1) + ')"'
+                      + (page === 0 ? ' disabled' : '') + '>&#8249; Prev</button>';
+                  for (const s of slots) {
+                    if (s === '...') {
+                      pg += '<span class="page-ellipsis">…</span>';
+                    } else {
+                      pg += '<button class="page-btn' + (s === page ? ' active' : '') + '" onclick="renderSymbolPage(' + s + ')">'
+                          + (s + 1) + '</button>';
+                    }
+                  }
+                  pg += '<button class="page-btn" onclick="renderSymbolPage(' + (page+1) + ')"'
+                      + (page >= totalPages-1 ? ' disabled' : '') + '>Next &#8250;</button>';
+                  pg += '</div>';
+                  document.getElementById('symbol-pagination').innerHTML = pg;
+                }
+
+                document.getElementById('right').scrollTop = 0;
+              }
+
+              function symbolPageSlots(c, t) {
+                if (t <= 9) return Array.from({length:t}, (_, i) => i);
+                if (c <= 4) return [0,1,2,3,4,5,'...',t-1];
+                if (c >= t-5) return [0,'...',t-6,t-5,t-4,t-3,t-2,t-1];
+                return [0,'...',c-2,c-1,c,c+1,c+2,'...',t-1];
+              }
+
+              // ── Javadoc search ─────────────────────────────────────────────
+              async function javadocSearch() {
+                const q = document.getElementById('javadoc-input').value.trim();
+                if (!q) return;
+                showView('javadoc');
+                setViewUrl('javadoc', '/?jq=' + enc(q));
+                document.getElementById('javadoc-count').textContent = '';
+                setInner('javadoc-results', '<div class="status-row">Searching…</div>');
+                try {
+                  const hits = await (await fetch('/api/javadoc?q=' + enc(q))).json();
+                  document.getElementById('javadoc-count').textContent = hits.length;
+                  if (hits.length === 0) { setInner('javadoc-results', '<div class="status-row">No results found.</div>'); return; }
+                  setInner('javadoc-results', '<div class="result-list">' + hits.map(h =>
+                    '<div class="result-row"><div class="hit-title">' +
+                      (h.docsUrl ? '<a class="doc-link" href="' + esc(h.docsUrl) + '" data-doc-title="' + esc(h.title) + '">' + esc(h.title) + '</a>' : esc(h.title)) +
+                    '</div>' +
+                    '<div class="hit-url">' + esc(shortPath(h.url)) + '</div>' +
+                    (h.snippet ? '<div class="hit-snippet">' + esc(h.snippet.slice(0,200)) + '</div>' : '') +
+                    '</div>'
+                  ).join('') + '</div>');
+                } catch(e) {
+                  setInner('javadoc-results', '<div class="status-row error">Error: ' + esc(e.message) + '</div>');
+                }
               }
 
               // ── Project list ───────────────────────────────────────────────
@@ -342,7 +702,7 @@ public class PortalResource {
                                   : p.compiledDocs.includes('target/doc') ? 'rustdoc'
                                   : (p.compiledDocs === 'doc/html' || p.compiledDocs === 'docs/html' || p.compiledDocs === 'html') ? 'doxygen'
                                   : 'docs';
-                      tags += '<a class="tag tag-docs" style="text-decoration:none" href="/docs/' + enc(p.name) + '" target="_blank">' + label + '</a>';
+                      tags += '<a class="tag tag-docs doc-link" style="text-decoration:none" href="/docs/' + enc(p.name) + '/index.html" data-doc-title="' + esc(p.name + ' \u203a ' + label) + '">' + label + '</a>';
                     }
                     const sub = (p.isMaven && p.groupId && p.artifactId)
                       ? '<span style="display:block;font-size:0.72rem;color:var(--text-secondary);font-family:monospace;font-weight:400;margin-top:1px;">' + esc(p.groupId) + ':' + esc(p.artifactId) + '</span>' : '';
@@ -392,29 +752,6 @@ public class PortalResource {
               function changePage(n) { loadProjects(n, currentFilter); }
               function setPageSize(n) { pageSize = n; loadProjects(0, currentFilter); }
               function filterProjects(q) { clearTimeout(filterTimer); filterTimer = setTimeout(() => loadProjects(0, q), 300); }
-
-              // ── Javadoc search ─────────────────────────────────────────────
-              async function javadocSearch() {
-                const q = document.getElementById('javadoc-input').value.trim();
-                if (!q) return;
-                show('javadoc-section');
-                setInner('javadoc-results', '<div class="status-row">Searching…</div>');
-                try {
-                  const hits = await (await fetch('/api/javadoc?q=' + enc(q))).json();
-                  document.getElementById('javadoc-count').textContent = hits.length;
-                  if (hits.length === 0) { setInner('javadoc-results', '<div class="status-row">No results found.</div>'); return; }
-                  setInner('javadoc-results', '<div class="result-list">' + hits.map(h =>
-                    '<div class="result-row"><div class="hit-title">' +
-                      (h.docsUrl ? '<a href="' + esc(h.docsUrl) + '" target="_blank">' + esc(h.title) + '</a>' : esc(h.title)) +
-                    '</div>' +
-                    '<div class="hit-url">' + esc(shortPath(h.url)) + '</div>' +
-                    (h.snippet ? '<div class="hit-snippet">' + esc(h.snippet.slice(0,200)) + '</div>' : '') +
-                    '</div>'
-                  ).join('') + '</div>');
-                } catch(e) {
-                  setInner('javadoc-results', '<div class="status-row error">Error: ' + esc(e.message) + '</div>');
-                }
-              }
 
               // ── Reindex ────────────────────────────────────────────────────
               async function doReindex(btn) {
@@ -531,11 +868,11 @@ public class PortalResource {
                   document.getElementById('build-log-output').textContent = '';
                   rerunBtn.style.display = 'none';
                 }
-                document.getElementById('build-log-panel').style.display = 'flex';
+                showView('build');
               }
 
               function closeLog() {
-                document.getElementById('build-log-panel').style.display = 'none';
+                goBack();
               }
 
               function rerunBuild() {
@@ -547,328 +884,20 @@ public class PortalResource {
                 doBuild(lastBuildBtn);
               }
 
+              // ── Restore the view named in the address ──────────────────────
+              (function restoreFromUrl() {
+                const params = new URLSearchParams(location.search);
+                if (params.get('q')) {
+                  symbolSearch(params.get('q'), params.get('type') || 'references', parseInt(params.get('page') || '0'));
+                } else if (params.get('jq')) {
+                  document.getElementById('javadoc-input').value = params.get('jq');
+                  javadocSearch();
+                } else if (params.get('doc')) {
+                  openDoc(params.get('doc'), params.get('doc'));
+                }
+              })();
+
               loadProjects(0, '');
-            </script>
-            </body>
-            </html>
-            """;
-
-    // ── Symbol search results page (/search) ──────────────────────────────────
-    private static final String SEARCH_HTML = """
-            <!DOCTYPE html>
-            <html lang="en">
-            <head>
-              <meta charset="UTF-8">
-              <meta name="viewport" content="width=device-width, initial-scale=1.0">
-              <title>Search — code-raptor</title>
-              <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦅</text></svg>">
-              <style>
-            """ + COMMON_CSS + """
-                main { max-width: 1200px; }
-
-                /* ── Result summary bar ── */
-                .result-summary {
-                  display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap;
-                  padding: 0.6rem 0; margin-bottom: 1.5rem;
-                  border-bottom: 1px solid var(--border);
-                }
-                .result-count { font-weight: 700; font-size: 1.05rem; }
-                .result-query { color: var(--accent); font-family: 'SFMono-Regular', Consolas, monospace; font-size: 1rem; }
-                .result-type-badge {
-                  font-size: 0.72rem; padding: 0.12rem 0.5rem; border-radius: 3px;
-                  background: var(--bg-tertiary); color: var(--accent2);
-                  border: 1px solid var(--border); font-family: monospace;
-                }
-                .result-range { color: var(--text-secondary); font-size: 0.82rem; margin-left: auto; }
-
-                /* ── File group (OpenGrok style) ── */
-                .file-group { margin-bottom: 1.5rem; border-radius: 4px; overflow: hidden; }
-
-                .file-header {
-                  display: flex; align-items: center; gap: 1rem;
-                  padding: 0.45rem 1rem;
-                  background: var(--bg-secondary);
-                  border-left: 3px solid var(--accent2);
-                  border-bottom: 1px solid var(--border);
-                  border-radius: 4px 4px 0 0;
-                }
-                .file-path {
-                  font-family: 'SFMono-Regular', Consolas, monospace;
-                  color: var(--accent2); font-size: 0.875rem; font-weight: 600;
-                  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-                  text-decoration: none;
-                }
-                a.file-path:hover { text-decoration: underline; }
-                .file-project {
-                  color: var(--accent3); font-weight: 700;
-                }
-                .file-path-rest { color: var(--text-secondary); font-weight: 400; }
-                .match-count {
-                  color: var(--text-secondary); font-size: 0.72rem;
-                  background: var(--bg-tertiary); border: 1px solid var(--border);
-                  border-radius: 3px; padding: 0.05rem 0.4rem;
-                  white-space: nowrap; font-family: monospace;
-                }
-
-                /* ── Code lines table ── */
-                .result-lines {
-                  border: 1px solid var(--border); border-top: none;
-                  border-radius: 0 0 4px 4px;
-                  background: var(--bg-primary);
-                  overflow: hidden;
-                }
-                .result-line {
-                  display: flex; align-items: stretch;
-                  border-bottom: 1px solid rgba(88,91,112,0.25);
-                }
-                .result-line:last-child { border-bottom: none; }
-                .result-line:hover { background: var(--bg-secondary); }
-
-                .line-num {
-                  min-width: 4.5rem; text-align: right;
-                  padding: 0.25rem 0.75rem;
-                  color: var(--text-secondary);
-                  font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.8rem;
-                  text-decoration: none; user-select: none;
-                  border-right: 1px solid rgba(88,91,112,0.4);
-                  background: rgba(49,50,68,0.5); flex-shrink: 0;
-                  display: flex; align-items: center; justify-content: flex-end;
-                }
-                .line-num:hover { color: var(--accent2); text-decoration: underline; }
-
-                .line-code {
-                  padding: 0.25rem 1rem;
-                  font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.82rem;
-                  white-space: pre; overflow: hidden; text-overflow: ellipsis;
-                  color: var(--text-primary); flex: 1; align-self: center;
-                }
-
-                mark.hl {
-                  background: rgba(249,226,175,0.22); color: var(--yellow);
-                  border-radius: 2px; padding: 0.05em 0.1em;
-                  font-style: normal;
-                }
-
-                /* ── Pagination ── */
-                .pagination {
-                  display: flex; align-items: center; gap: 0.4rem;
-                  justify-content: center; margin: 2.5rem 0 1.5rem; flex-wrap: wrap;
-                }
-                .page-btn {
-                  padding: 0.3rem 0.75rem; border-radius: 4px;
-                  border: 1px solid var(--border);
-                  background: var(--bg-secondary); color: var(--text-primary);
-                  font-size: 0.82rem; cursor: pointer; text-decoration: none;
-                  display: inline-block;
-                }
-                .page-btn:hover:not([disabled]):not(.active) { border-color: var(--accent2); color: var(--accent2); }
-                .page-btn.active { background: var(--accent2); color: var(--bg-primary); border-color: var(--accent2); font-weight: 700; cursor: default; }
-                .page-btn[disabled] { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
-                .page-ellipsis { padding: 0.3rem 0.3rem; color: var(--text-secondary); font-size: 0.85rem; align-self: center; }
-
-                .no-results { color: var(--text-secondary); padding: 2rem 0; text-align: center; font-size: 0.9rem; }
-                .loading { color: var(--text-secondary); padding: 2rem 0; text-align: center; }
-              </style>
-            </head>
-            <body>
-
-            <header>
-              <div class="header-brand">
-                <h1><a href="/">🦅 code-raptor</a></h1>
-              </div>
-
-              <div class="search-forms">
-                <div class="search-group">
-                  <label>Symbol</label>
-                  <input type="text" id="q" placeholder="e.g. addIIActor"
-                         onkeydown="if(event.key==='Enter') doSearch()">
-                  <select id="type">
-                    <option value="references">references</option>
-                    <option value="definition">definition</option>
-                    <option value="grep">grep</option>
-                    <option value="files">files</option>
-                  </select>
-                  <button class="btn btn-primary" onclick="doSearch()">Search</button>
-                </div>
-              </div>
-            </header>
-
-            <main>
-              <div id="summary" class="loading">Loading…</div>
-              <div id="results"></div>
-              <div id="pagination"></div>
-            </main>
-
-            <script>
-              const PAGE_SIZE = 50;
-              let allHits = [], currentPage = 0, searchQuery = '', searchType = '';
-
-              function esc(s) { return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-              function enc(s) { return encodeURIComponent(s); }
-
-              async function init() {
-                const p = new URLSearchParams(location.search);
-                searchQuery = p.get('q') || '';
-                searchType  = p.get('type') || 'references';
-                currentPage = parseInt(p.get('page') || '0');
-
-                if (!searchQuery) { window.location.href = '/'; return; }
-
-                // Prefill search form
-                document.getElementById('q').value = searchQuery;
-                const sel = document.getElementById('type');
-                for (let o of sel.options) if (o.value === searchType) { o.selected = true; break; }
-                document.title = '"' + searchQuery + '" — code-raptor';
-
-                document.getElementById('summary').innerHTML = '<span class="loading">Searching…</span>';
-
-                try {
-                  const res = await fetch('/api/symbol?q=' + enc(searchQuery) + '&type=' + enc(searchType));
-                  if (!res.ok) {
-                    // 503 carries why nothing was searched (GNU Global missing); show that, not a bare status.
-                    let message = 'HTTP ' + res.status;
-                    try { const body = await res.json(); if (body && body.error) message = body.error; } catch (_) {}
-                    throw new Error(message);
-                  }
-                  allHits = await res.json();
-                  renderPage(currentPage);
-                } catch(e) {
-                  document.getElementById('summary').innerHTML =
-                    '<span style="color:var(--red)">Error: ' + esc(e.message) + '</span>';
-                }
-              }
-
-              function doSearch() {
-                const q = document.getElementById('q').value.trim();
-                const t = document.getElementById('type').value;
-                if (!q) return;
-                window.location.href = '/search?q=' + enc(q) + '&type=' + enc(t);
-              }
-
-              function renderPage(page) {
-                currentPage = page;
-                const total      = allHits.length;
-                const totalPages = Math.ceil(total / PAGE_SIZE) || 1;
-                // Clamp page
-                if (page >= totalPages) page = currentPage = totalPages - 1;
-
-                const from     = page * PAGE_SIZE;
-                const to       = Math.min(from + PAGE_SIZE, total);
-                const pageHits = allHits.slice(from, to);
-
-                // Update URL (no reload)
-                const url = '/search?q=' + enc(searchQuery) + '&type=' + enc(searchType)
-                          + (page > 0 ? '&page=' + page : '');
-                history.replaceState(null, '', url);
-
-                // Summary
-                const typeLabel = searchType || 'references';
-                document.getElementById('summary').innerHTML =
-                  '<span class="result-count">' + total + '</span> result' + (total !== 1 ? 's' : '') +
-                  ' for <span class="result-query">' + esc(searchQuery) + '</span>' +
-                  ' &nbsp;<span class="result-type-badge">' + esc(typeLabel) + '</span>' +
-                  (totalPages > 1
-                    ? '<span class="result-range">page ' + (page+1) + ' / ' + totalPages +
-                      ' &nbsp;(' + (from+1) + '–' + to + ')</span>'
-                    : '');
-
-                // ── Group by file ──────────────────────────────────────────
-                const byFile = new Map();
-                for (const h of pageHits) {
-                  if (!byFile.has(h.file)) byFile.set(h.file, []);
-                  byFile.get(h.file).push(h);
-                }
-
-                const WORKS   = '%%WORKS_DIR%%';
-                const ideHost = location.hostname + ':8080';
-                const ideBase = 'http://' + ideHost;
-
-                function makeIdeUrl(h) {
-                  const abs    = h.file.startsWith(WORKS) ? h.file : WORKS + h.file;
-                  const fUri   = 'vscode-remote://' + ideHost + abs + ':' + h.line;
-                  const pl     = JSON.stringify([['openFile', fUri], ['gotoLineMode', 'true']]);
-                  return ideBase + '/?folder=' + enc(WORKS.slice(0,-1)) + '&payload=' + enc(pl);
-                }
-
-                function highlightTerm(escapedCode, term) {
-                  if (!term || term.length < 2) return escapedCode;
-                  // Escape regex special chars in the search term
-                  const re = new RegExp(term.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&'), 'gi');
-                  return escapedCode.replace(re, '<mark class="hl">$&</mark>');
-                }
-
-                // Split path into project / rest for visual emphasis
-                function splitPath(file) {
-                  const rel = file.startsWith('%%WORKS_DIR%%') ? file.slice('%%WORKS_DIR%%'.length) : file;
-                  const slash = rel.indexOf('/');
-                  if (slash < 0) return { project: rel, rest: '' };
-                  return { project: rel.slice(0, slash), rest: rel.slice(slash) };
-                }
-
-                let html = '';
-                if (pageHits.length === 0) {
-                  html = '<div class="no-results">No results found for <em>' + esc(searchQuery) + '</em>.</div>';
-                } else {
-                  for (const [file, lines] of byFile) {
-                    const { project, rest } = splitPath(file);
-                    html += '<div class="file-group">';
-                    // File header
-                    const firstUrl = makeIdeUrl(lines[0]);
-                    html += '<div class="file-header">';
-                    html += '<a class="file-path" href="' + firstUrl + '" target="code-server-ide">'
-                          + '<span class="file-project">' + esc(project) + '</span>'
-                          + '<span class="file-path-rest">' + esc(rest) + '</span>'
-                          + '</a>';
-                    html += '<span class="match-count">' + lines.length + ' match' + (lines.length > 1 ? 'es' : '') + '</span>';
-                    html += '</div>';
-                    // Code lines
-                    html += '<div class="result-lines">';
-                    for (const h of lines) {
-                      const ideUrl = makeIdeUrl(h);
-                      const code   = highlightTerm(esc(h.content.trim()), searchQuery);
-                      html += '<div class="result-line">';
-                      html += '<a class="line-num" href="' + ideUrl + '" target="code-server-ide">' + h.line + '</a>';
-                      html += '<span class="line-code">' + code + '</span>';
-                      html += '</div>';
-                    }
-                    html += '</div></div>';
-                  }
-                }
-                document.getElementById('results').innerHTML = html;
-
-                // ── Pagination ─────────────────────────────────────────────
-                if (totalPages <= 1) {
-                  document.getElementById('pagination').innerHTML = '';
-                } else {
-                  const slots = buildPageSlots(page, totalPages);
-                  let pg = '<div class="pagination">';
-                  pg += '<button class="page-btn" onclick="renderPage(' + (page-1) + ')"'
-                      + (page === 0 ? ' disabled' : '') + '>&#8249; Prev</button>';
-                  for (const s of slots) {
-                    if (s === '...') {
-                      pg += '<span class="page-ellipsis">…</span>';
-                    } else {
-                      pg += '<button class="page-btn' + (s === page ? ' active' : '') + '" onclick="renderPage(' + s + ')">'
-                          + (s + 1) + '</button>';
-                    }
-                  }
-                  pg += '<button class="page-btn" onclick="renderPage(' + (page+1) + ')"'
-                      + (page >= totalPages-1 ? ' disabled' : '') + '>Next &#8250;</button>';
-                  pg += '</div>';
-                  document.getElementById('pagination').innerHTML = pg;
-                }
-
-                window.scrollTo(0, 0);
-              }
-
-              function buildPageSlots(c, t) {
-                if (t <= 9) return Array.from({length:t}, (_, i) => i);
-                if (c <= 4) return [0,1,2,3,4,5,'...',t-1];
-                if (c >= t-5) return [0,'...',t-6,t-5,t-4,t-3,t-2,t-1];
-                return [0,'...',c-2,c-1,c,c+1,c+2,'...',t-1];
-              }
-
-              init();
             </script>
             </body>
             </html>
@@ -892,10 +921,15 @@ public class PortalResource {
         return PORTAL_HTML.replace("%%WORKS_DIR%%", worksDirPrefix());
     }
 
+    /**
+     * Symbol results now appear in the portal's right pane; old {@code /search?q=...} links
+     * keep working by being sent to {@code /?q=...}. The target always starts with "/?", so a
+     * query string cannot turn it into another origin.
+     */
     @GET
     @Path("search")
-    @Produces(MediaType.TEXT_HTML)
-    public String search() {
-        return SEARCH_HTML.replace("%%WORKS_DIR%%", worksDirPrefix());
+    public Response search(@Context UriInfo uriInfo) {
+        String query = uriInfo.getRequestUri().getRawQuery();
+        return Response.seeOther(URI.create(query == null ? "/" : "/?" + query)).build();
     }
 }
